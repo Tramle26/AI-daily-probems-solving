@@ -11,3 +11,6 @@ __pycache__/
 *.pyzzz
 *.pywzzz
 *.pyzzzz
+example.py
+
+.env
