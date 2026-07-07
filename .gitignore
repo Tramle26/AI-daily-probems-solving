@@ -13,4 +13,14 @@ __pycache__/
 *.pyzzzz
 example.py
 
+# Secrets
 .env
+.env.*
+
+# Local database & user uploads
+instance/
+uploads/
+*.db
+
+# macOS
+.DS_Store
