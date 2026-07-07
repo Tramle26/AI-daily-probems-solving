@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Gemma Learning{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
+    {% block extra_head %}{% endblock %}
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="brand">
+        <div class="mark">G</div>
+        <div>
+          <strong>Gemma Learning</strong>
+          <span class="muted">Language memory system</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('main.upload') }}">Upload</a>
+        <a href="{{ url_for('flashcards.index') }}">Flashcards</a>
+        <a href="{{ url_for('main.quiz') }}">Quiz</a>
+        <a href="{{ url_for('main.dictionary') }}">Dictionary</a>
+        <a href="{{ url_for('main.history') }}">History</a>
+        <a href="{{ url_for('main.settings') }}">Settings</a>
+      </nav>
+    </header>
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

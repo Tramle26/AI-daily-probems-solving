@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ page_title }} — Gemma Learning{% endblock %}
+{% block content %}
+<section class="stub">
+  <h1>{{ page_title }}</h1>
+  <p class="muted">This page will be implemented in {{ phase }}.</p>
+  <a href="{{ url_for('flashcards.index') }}">Go to Flashcards</a>
+</section>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Settings — Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Settings</h1>
+  <p class="muted">Choose your target language and goals. You can change these later in Settings.</p>
+  <form method="post" class="form-grid">
+    <label>Target language
+      <select name="target_language" required>
+        {% for lang in languages %}
+        <option value="{{ lang }}" {% if profile.target_language == lang %}selected{% endif %}>{{ lang }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Native / explanation language
+      <select name="native_language" required>
+        {% for lang in languages %}
+        <option value="{{ lang }}" {% if profile.native_language == lang %}selected{% endif %}>{{ lang }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Level (optional)
+      <select name="level">
+        <option value="">Not sure yet</option>
+        {% for lvl in ["A1","A2","B1","B2","C1"] %}
+        <option value="{{ lvl }}" {% if profile.level == lvl %}selected{% endif %}>{{ lvl }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Learning goal
+      <select name="goal">
+        <option value="">Choose one</option>
+        {% for value, label in goals %}
+        <option value="{{ value }}" {% if profile.goal == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="primary">Save settings</button>
+  </form>
+</section>
+{% endblock %}

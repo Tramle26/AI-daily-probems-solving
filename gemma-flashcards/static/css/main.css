@@ -1,0 +1,83 @@
+/* static/css/main.css */
+:root {
+  --green: #58cc02;
+  --green-dark: #46a302;
+  --ink: #17210f;
+  --muted: #66735f;
+  --line: #dfe8d8;
+  --soft: #f6fbf2;
+  --white: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--soft);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 16px 24px;
+  background: var(--white);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--green);
+  color: var(--white);
+  font-weight: 900;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.nav a {
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.nav a:hover {
+  color: var(--green-dark);
+}
+
+.container {
+  padding: 24px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.stub {
+  max-width: 480px;
+  padding: 32px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
