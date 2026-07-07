@@ -1,11 +1,12 @@
 [project]
 name = "gemma-flashcards"
 version = "0.1.0"
-description = "Add your description here"
+description = "Gemma-powered language learning memory system"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "flask>=3.1.3",
+    "flask-sqlalchemy>=3.1.0",
     "google-genai>=2.10.0",
     "ollama>=0.6.2",
     "pydantic>=2.13.4",

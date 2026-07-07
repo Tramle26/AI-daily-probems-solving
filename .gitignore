@@ -24,3 +24,7 @@ uploads/
 
 # macOS
 .DS_Store
+
+instance/
+uploads/
+*.db

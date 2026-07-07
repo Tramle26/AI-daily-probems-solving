@@ -8,8 +8,9 @@ from ollama import Client as OllamaClient
 from ollama import ResponseError
 from pydantic import BaseModel , Field, ValidationError
 
+from extensions import db
+
 load_dotenv()
-app = Flask(__name__)
 
 GOOGLE_MODEL = "gemma-4-26b-a4b-it"
 
@@ -128,84 +129,103 @@ def local_cards(client, language, theme, count):
     return (chunk.message.content for chunk in stream if chunk.message.content)
 
 
-@app.get("/")
-def index():
-    return render_template("index.html")
+def create_app():
+    app = Flask(__name__)
+    app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret")
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///learning.db"
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["UPLOAD_FOLDER"] = os.path.join(app.root_path, "uploads")
 
+    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
-@app.get("/stream")
-def stream():
-    # The browser's EventSource can only make GET requests, so the deck settings
-    # arrive in the query string.
-    language = request.args.get("language", "French").strip() or "French"
-    theme = request.args.get("theme", "World Cup soccer").strip() or "World Cup soccer"
-    provider = request.args.get("provider", "google")
-    count = clean_count(request.args.get("count", "6"))
+    db.init_app(app)
 
-    @stream_with_context
-    def events():
-        try:
-            # Pick a provider and get back a stream of raw JSON text pieces.
-            if provider == "local":
-                client = OllamaClient()
-                pieces = local_cards(client, language, theme, count)
-            else:
-                api_key = os.environ.get("GEMINI_API_KEY")
-                if not api_key:
-                    yield sse("error", {"message": "Missing GEMINI_API_KEY in your .env file."})
+    with app.app_context():
+        import models  # noqa: F401 — register all models with SQLAlchemy
+        db.create_all()
+
+    @app.get("/")
+    def index():
+        return render_template("index.html")
+
+    @app.get("/stream")
+    def stream():
+        # The browser's EventSource can only make GET requests, so the deck settings
+        # arrive in the query string.
+        language = request.args.get("language", "French").strip() or "French"
+        theme = request.args.get("theme", "World Cup soccer").strip() or "World Cup soccer"
+        provider = request.args.get("provider", "google")
+        count = clean_count(request.args.get("count", "6"))
+
+        @stream_with_context
+        def events():
+            try:
+                # Pick a provider and get back a stream of raw JSON text pieces.
+                if provider == "local":
+                    client = OllamaClient()
+                    pieces = local_cards(client, language, theme, count)
+                else:
+                    api_key = os.environ.get("GEMINI_API_KEY")
+                    if not api_key:
+                        yield sse("error", {"message": "Missing GEMINI_API_KEY in your .env file."})
+                        return
+
+                    client = genai.Client(api_key=api_key)
+                    pieces = google_cards(client, language, theme, count)
+
+                # Turn the stream into finished cards and push each one to the browser.
+                emitted = 0
+                for card_data in stream_cards(pieces):
+                    try:
+                        card = Flashcard.model_validate(card_data)
+                    except ValidationError:
+                        continue  # skip anything that is not a well-formed card
+
+                    emitted += 1
+                    yield sse(
+                        "card",
+                        {"index": emitted, "total": count, "card": card.model_dump()},
+                    )
+                    yield sse("progress", {"current": emitted, "total": count})
+
+                    if emitted >= count:  # stop if the model is feeling generous
+                        break
+
+                if emitted == 0:
+                    yield sse("error", {"message": "The model didn't return any cards. Try again."})
                     return
 
-                client = genai.Client(api_key=api_key)
-                pieces = google_cards(client, language, theme, count)
-
-            # Turn the stream into finished cards and push each one to the browser.
-            emitted = 0
-            for card_data in stream_cards(pieces):
-                try:
-                    card = Flashcard.model_validate(card_data)
-                except ValidationError:
-                    continue  # skip anything that is not a well-formed card
-
-                emitted += 1
+            except ResponseError as exc:
                 yield sse(
-                    "card",
-                    {"index": emitted, "total": count, "card": card.model_dump()},
+                    "error",
+                    {
+                        "message": (
+                            f"Ollama error: {exc.error}. "
+                            f"Try running: ollama pull {LOCAL_MODEL}"
+                        )
+                    },
                 )
-                yield sse("progress", {"current": emitted, "total": count})
-
-                if emitted >= count:  # stop if the model is feeling generous
-                    break
-
-            if emitted == 0:
-                yield sse("error", {"message": "The model didn't return any cards. Try again."})
+                return
+            except Exception as exc:
+                yield sse("error", {"message": f"Something went wrong: {exc}"})
                 return
 
-        except ResponseError as exc:
-            yield sse(
-                "error",
-                {
-                    "message": (
-                        f"Ollama error: {exc.error}. "
-                        f"Try running: ollama pull {LOCAL_MODEL}"
-                    )
-                },
-            )
-            return
-        except Exception as exc:
-            yield sse("error", {"message": f"Something went wrong: {exc}"})
-            return
+            yield sse("done", {"message": "Deck ready"})
 
-        yield sse("done", {"message": "Deck ready"})
+        # text/event-stream keeps the HTTP connection open so we can push cards over time.
+        return Response(
+            events(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
-    # text/event-stream keeps the HTTP connection open so we can push cards over time.
-    return Response(
-        events(),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return app
+
+
+app = create_app()
 
 if __name__ == "__main__":
     app.run(debug=True)
