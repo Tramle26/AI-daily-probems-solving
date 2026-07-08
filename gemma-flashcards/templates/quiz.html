@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}Quiz — Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Quiz</h1>
+  <p class="muted">Practice vocabulary with multiple choice or fill-in-the-blank questions.</p>
+
+  <div id="setup" class="form-grid">
+    <label>Source
+      <select id="sourceType">
+        <option value="weak">Weak words</option>
+        <option value="all">All non-mastered</option>
+        <option value="today">Today's words</option>
+        <option value="deck">Saved deck</option>
+      </select>
+    </label>
+    <label id="deckLabel" hidden>Deck
+      <select id="deckId">
+        {% for deck in decks %}
+        <option value="{{ deck.id }}">{{ deck.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Quiz type
+      <select id="quizType">
+        <option value="multiple_choice">Multiple choice</option>
+        <option value="fill_blank">Fill in the blank</option>
+      </select>
+    </label>
+    <label>Number of questions
+      <input type="number" id="limit" min="1" max="20" value="5" />
+    </label>
+    <button type="button" id="startBtn" class="primary">Start quiz</button>
+  </div>
+
+  <p id="status" class="muted" style="margin-top: 16px;"></p>
+
+  <div id="quiz" hidden>
+    <div id="questionCard" class="list-card" style="margin-top: 16px;"></div>
+    <div id="options" class="form-grid" style="margin-top: 16px;"></div>
+    <button type="button" id="nextBtn" class="secondary" hidden>Next question</button>
+  </div>
+
+  <div id="results" class="list-card" hidden style="margin-top: 16px;">
+    <h2>Results</h2>
+    <p id="scoreText"></p>
+    <button type="button" id="restartBtn" class="primary">Try again</button>
+  </div>
+</section>
+
+<script>
+  let sessionId = null
+  let questions = []
+  let current = 0
+  let answers = []
+
+  const sourceType = document.querySelector("#sourceType")
+  const deckLabel = document.querySelector("#deckLabel")
+
+  sourceType.addEventListener("change", () => {
+    deckLabel.hidden = sourceType.value !== "deck"
+  })
+
+  document.querySelector("#startBtn").addEventListener("click", async () => {
+    const statusEl = document.querySelector("#status")
+    statusEl.textContent = "Building quiz..."
+
+    const payload = {
+      source_type: sourceType.value,
+      quiz_type: document.querySelector("#quizType").value,
+      limit: Number(document.querySelector("#limit").value),
+    }
+    if (payload.source_type === "deck") {
+      payload.source_id = Number(document.querySelector("#deckId").value)
+    }
+
+    const res = await fetch("/api/quiz/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      statusEl.textContent = data.error || "Could not start quiz."
+      return
+    }
+
+    sessionId = data.session_id
+    questions = data.questions
+    current = 0
+    answers = []
+
+    document.querySelector("#setup").hidden = true
+    document.querySelector("#results").hidden = true
+    document.querySelector("#quiz").hidden = false
+    statusEl.textContent = ""
+    showQuestion()
+  })
+
+  function showQuestion() {
+    const q = questions[current]
+    const questionCard = document.querySelector("#questionCard")
+    const optionsEl = document.querySelector("#options")
+    const nextBtn = document.querySelector("#nextBtn")
+
+    questionCard.innerHTML = `<p><strong>Question ${current + 1} of ${questions.length}</strong></p><p>${q.question}</p>`
+    optionsEl.innerHTML = ""
+    nextBtn.hidden = true
+
+    if (q.quiz_type === "multiple_choice") {
+      q.options.forEach((option) => {
+        const btn = document.createElement("button")
+        btn.type = "button"
+        btn.className = "secondary"
+        btn.textContent = option
+        btn.addEventListener("click", () => submitAnswer(option, q))
+        optionsEl.appendChild(btn)
+      })
+    } else {
+      const input = document.createElement("input")
+      input.type = "text"
+      input.id = "fillAnswer"
+      optionsEl.appendChild(input)
+      const btn = document.createElement("button")
+      btn.type = "button"
+      btn.className = "primary"
+      btn.textContent = "Submit answer"
+      btn.addEventListener("click", () => submitAnswer(input.value, q))
+      optionsEl.appendChild(btn)
+    }
+  }
+
+  function submitAnswer(userAnswer, q) {
+    answers.push({
+      vocab_id: q.vocab_id,
+      question: q.question,
+      user_answer: userAnswer,
+      correct: q.correct,
+    })
+
+    if (current < questions.length - 1) {
+      current += 1
+      showQuestion()
+    } else {
+      finishQuiz()
+    }
+  }
+
+  async function finishQuiz() {
+    const res = await fetch("/api/quiz/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, answers }),
+    })
+
+    const data = await res.json()
+    document.querySelector("#quiz").hidden = true
+    document.querySelector("#results").hidden = false
+    document.querySelector("#scoreText").textContent = `You scored ${data.score} / ${data.total} (${data.accuracy}% accuracy).`
+  }
+
+  document.querySelector("#restartBtn").addEventListener("click", () => {
+    document.querySelector("#setup").hidden = false
+    document.querySelector("#results").hidden = true
+    document.querySelector("#status").textContent = ""
+  })
+</script>
+{% endblock %}

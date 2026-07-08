@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Upload Preview — Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>{{ doc.filename }}</h1>
+  <p class="muted">{{ doc.language or "Unknown language" }} · {{ doc.word_count }} words</p>
+
+  <div class="list-card" style="margin: 16px 0;">
+    <h2>Extracted text</h2>
+    <p>{{ doc.raw_text[:500] }}{% if doc.raw_text|length > 500 %}...{% endif %}</p>
+  </div>
+
+  <div class="form-grid">
+    <label>Max words to extract
+      <input type="number" id="maxWords" min="1" max="20" value="8" />
+    </label>
+    <label>
+      <input type="checkbox" id="saveDeck" checked />
+      Save deck after generating
+    </label>
+    <button type="button" id="generateBtn" class="primary">Generate flashcards</button>
+  </div>
+
+  <p id="status" class="muted" style="margin-top: 16px;"></p>
+  <div id="cards" class="section-grid" style="margin-top: 16px;"></div>
+</section>
+
+<script>
+  const generateBtn = document.querySelector("#generateBtn")
+  const statusEl = document.querySelector("#status")
+  const cardsEl = document.querySelector("#cards")
+
+  generateBtn.addEventListener("click", async () => {
+    generateBtn.disabled = true
+    statusEl.textContent = "Generating vocabulary..."
+    cardsEl.innerHTML = ""
+
+    const res = await fetch("/api/documents/{{ doc.id }}/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        max_words: Number(document.querySelector("#maxWords").value),
+        language: "{{ doc.language or 'French' }}",
+        native_language: "English",
+        save: document.querySelector("#saveDeck").checked,
+      }),
+    })
+
+    const data = await res.json()
+    generateBtn.disabled = false
+
+    if (!res.ok) {
+      statusEl.textContent = data.error || "Generation failed."
+      return
+    }
+
+    statusEl.textContent = data.deck_id
+      ? `Generated ${data.cards.length} cards and saved deck #${data.deck_id}.`
+      : `Generated ${data.cards.length} cards.`
+
+    cardsEl.innerHTML = data.cards.map((card) => `
+      <div class="list-card">
+        <strong>${card.front}</strong>
+        <p>${card.back}</p>
+        <p class="muted">${card.example || ""}</p>
+      </div>
+    `).join("")
+  })
+</script>
+{% endblock %}

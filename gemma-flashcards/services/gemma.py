@@ -154,3 +154,78 @@ def card_stream(language, theme, count, provider="google", exclude_words=None, n
         pieces = google_cards(client, prompt)
 
     yield from stream_cards(pieces)
+
+class VocabularyEntry(BaseModel):
+    word: str
+    meaning: str
+    example: str
+    topic: str = ""
+    difficulty: str = "beginner"
+
+
+class VocabularyList(BaseModel):
+    items: list[VocabularyEntry]
+
+
+class DictionaryResult(BaseModel):
+    word: str
+    meaning: str
+    simple_explanation: str
+    example: str
+    translation: str
+    topic: str = ""
+    difficulty: str = "beginner"
+    similar_words: list[str] = []
+    common_mistakes: list[str] = []
+
+
+def build_dictionary_prompt(word, language, native_language, related_words=None):
+    related = ""
+    if related_words:
+        related = f"\nThe learner has previously studied: {', '.join(related_words)}"
+    return f"""
+Explain the {language} word "{word}" for a language learner.
+Explain in {native_language}.{related}
+
+Return: word, meaning, simple_explanation, example, translation, topic, difficulty, similar_words, common_mistakes.
+"""
+
+
+def dictionary_lookup(client, word, language, native_language, related_words=None):
+    prompt = build_dictionary_prompt(word, language, native_language, related_words)
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.4,
+            response_mime_type="application/json",
+            response_schema=DictionaryResult,
+        ),
+    )
+    return DictionaryResult.model_validate_json(response.text)
+
+def build_document_prompt(text, language, max_words, native_language="English"):
+    excerpt = text[:8000]
+    return f"""
+    Extract the {max_words} most useful {language} vocabulary items from this passage.
+Explain meanings in {native_language}.
+
+Passage:
+{excerpt}
+
+Return JSON with items: word, meaning, example, topic, difficulty.
+Focus on words a learner needs to understand this text.
+"""
+
+def extract_document_vocabulary(client, text, language, max_words, native_language="English"):
+    prompt = build_document_prompt(text, language, max_words, native_language)
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.5,
+            response_mime_type="application/json",
+            response_schema=VocabularyList,
+        ),
+    )
+    return VocabularyList.model_validate_json(response.text)

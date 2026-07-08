@@ -4,15 +4,19 @@ This guide implements the competition-ready demo loop from [userflow.md](../../u
 
 ## Goals
 
-| In scope (Phase 1) | Out of scope (Phase 2+) |
-|--------------------|-------------------------|
-| Onboarding (language, goal, level) | Excel upload |
-| Save generated decks to SQLite | Ask Gemma / semantic search |
-| History-aware flashcard generation | PyTorch embeddings |
-| PDF/text upload → Gemma vocab extraction | Weak word review flow |
-| Dictionary search + add to deck | Placement test, roadmap |
-| Multiple choice + fill-in-the-blank quiz | Conversation practice |
-| Dashboard with stats + recommendations | Charts, weekly AI report |
+
+| In scope (Phase 1)                       | Out of scope (Phase 2+)     |
+| ---------------------------------------- | --------------------------- |
+| Onboarding (language, goal, level)       | Excel upload                |
+| Save generated decks to SQLite           | Ask Gemma / semantic search |
+| History-aware flashcard generation       | PyTorch embeddings          |
+| PDF/text upload → Gemma vocab extraction | Weak word review flow       |
+| Dictionary search + add to deck          | Placement test, roadmap     |
+| Multiple choice + fill-in-the-blank quiz | Conversation practice       |
+| Dashboard with stats + recommendations   | Charts, weekly AI report    |
+
+
+
 
 ## Exit criteria
 
@@ -26,6 +30,8 @@ This guide implements the competition-ready demo loop from [userflow.md](../../u
 
 ---
 
+
+
 ## Prerequisites
 
 - Phase 0 complete (`learning.db`, nav, `/flashcards` SSE working)
@@ -33,6 +39,8 @@ This guide implements the competition-ready demo loop from [userflow.md](../../u
 - Run all commands from `gemma-flashcards/`
 
 ---
+
+
 
 ## Step 1.1 — Add Phase 1 dependencies
 
@@ -66,7 +74,11 @@ app.register_blueprint(api.bp)
 
 ---
 
+
+
 ## Step 1.2 — Onboarding + settings
+
+
 
 ### Constants and routes (`routes/main.py`)
 
@@ -136,6 +148,8 @@ def settings():
     return render_template("settings.html", languages=LANGUAGES, goals=GOALS, profile=profile)
 ```
 
+
+
 ### Template `templates/onboarding.html`
 
 ```html
@@ -193,6 +207,8 @@ def home():
 ```
 
 ---
+
+
 
 ## Step 1.3 — Vocabulary service + save deck
 
@@ -297,6 +313,8 @@ def create_deck():
     return jsonify({"id": deck.id, "title": deck.title}), 201
 ```
 
+
+
 ### History-aware `/stream`
 
 Update `routes/flashcards.py`:
@@ -312,6 +330,8 @@ exclude = get_words_by_status(language, "mastered")
 # pass to card_stream / build_topic_prompt:
 # exclude_words=exclude, native_language=profile.native_language
 ```
+
+
 
 ### Save Deck UI (`templates/flashcards.html`)
 
@@ -355,6 +375,8 @@ document.querySelector("#saveDeck").addEventListener("click", async () => {
 Reset `generatedCards = []` at the start of each new generation.
 
 ---
+
+
 
 ## Step 1.4 — Document upload + vocab extraction
 
@@ -432,6 +454,8 @@ def extract_document_vocabulary(client, text, language, max_words, native_langua
     return VocabularyList.model_validate_json(response.text)
 ```
 
+
+
 ### Upload routes
 
 ```python
@@ -508,6 +532,8 @@ def generate_from_document(doc_id):
     return jsonify({"cards": cards})
 ```
 
+
+
 ### Template `templates/upload.html`
 
 Form with: language select, file input, textarea for paste, submit button.
@@ -517,6 +543,8 @@ Form with: language select, file input, textarea for paste, submit button.
 Show first 500 chars of extracted text, max words input, "Generate flashcards" button calling `/api/documents/<id>/generate`, card preview, "Save deck" checkbox.
 
 ---
+
+
 
 ## Step 1.5 — History page
 
@@ -532,6 +560,8 @@ def history():
     return render_template("history.html", items=items, status=status)
 ```
 
+
+
 ### Template `templates/history.html`
 
 Filter links: All | new | learning | weak | mastered
@@ -539,6 +569,8 @@ Filter links: All | new | learning | weak | mastered
 Table columns: Word, Meaning, Topic, Status, Source, Last reviewed
 
 ---
+
+
 
 ## Step 1.6 — Dictionary search
 
@@ -637,11 +669,15 @@ def dictionary_add():
     return jsonify({"ok": True})
 ```
 
+
+
 ### Template `templates/dictionary.html`
 
 Search input, results panel (meaning, example, similar words), "Add to vocabulary" button.
 
 ---
+
+
 
 ## Step 1.7 — Quiz
 
@@ -789,11 +825,15 @@ def quiz_submit():
     return jsonify({"score": score, "total": total, "accuracy": accuracy})
 ```
 
+
+
 ### Template `templates/quiz.html`
 
 Wizard: pick source (weak / deck / all) → pick type (MC / fill-blank) → questions → results with score.
 
 ---
+
+
 
 ## Step 1.8 — Dashboard
 
@@ -847,6 +887,8 @@ def dashboard():
     return render_template("dashboard.html", profile=g.profile, summary=summary)
 ```
 
+
+
 ### Template `templates/dashboard.html`
 
 Stat cards: Words learned, Mastered, Weak, Quiz accuracy (7d), Streak
@@ -854,6 +896,8 @@ Stat cards: Words learned, Mastered, Weak, Quiz accuracy (7d), Streak
 Sections: Recent decks, Recent uploads, Weak words list, Recommended next activity (CTA link)
 
 ---
+
+
 
 ## Step 1.9 — Update profile streak helper
 
@@ -876,6 +920,8 @@ def update_streak(profile):
 
 ---
 
+
+
 ## MVP demo script (judges)
 
 1. Open app → onboarding (French, English, document vocabulary goal)
@@ -888,21 +934,27 @@ def update_streak(profile):
 
 ---
 
+
+
 ## Verification checklist
 
-| Test | Expected |
-|------|----------|
-| First visit without goal | Redirect to `/onboarding` |
-| Save deck after generate | Rows in `flashcard_deck`, `flashcard`, `vocabulary_item` |
-| Generate with mastered words | Those words excluded from new deck |
-| PDF upload | Text extracted, preview shown |
-| Document generate | JSON cards returned, optional save |
-| Dictionary search | `dictionary_search` row created |
-| Quiz wrong answer | Word status → `weak` |
-| Quiz correct twice | Word status → `mastered` |
-| Dashboard | Stats match database counts |
+
+| Test                         | Expected                                                 |
+| ---------------------------- | -------------------------------------------------------- |
+| First visit without goal     | Redirect to `/onboarding`                                |
+| Save deck after generate     | Rows in `flashcard_deck`, `flashcard`, `vocabulary_item` |
+| Generate with mastered words | Those words excluded from new deck                       |
+| PDF upload                   | Text extracted, preview shown                            |
+| Document generate            | JSON cards returned, optional save                       |
+| Dictionary search            | `dictionary_search` row created                          |
+| Quiz wrong answer            | Word status → `weak`                                     |
+| Quiz correct twice           | Word status → `mastered`                                 |
+| Dashboard                    | Stats match database counts                              |
+
 
 ---
+
+
 
 ## Troubleshooting
 
@@ -916,11 +968,15 @@ def update_streak(profile):
 
 ---
 
+
+
 ## What comes next
 
 → [Phase 2a: Personalization](phase-2a-personalization.md) — review flow, Excel, Ask Gemma, topic continuity
 
 ---
+
+
 
 ## File checklist
 

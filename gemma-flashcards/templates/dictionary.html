@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Dictionary — Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Dictionary</h1>
+  <p class="muted">Look up a word in {{ profile.target_language }} with explanations in {{ profile.native_language }}.</p>
+
+  <div class="form-grid">
+    <label>Word
+      <input type="text" id="word" placeholder="Enter a word..." />
+    </label>
+    <button type="button" id="searchBtn" class="primary">Search</button>
+  </div>
+
+  <p id="status" class="muted" style="margin-top: 16px;"></p>
+
+  <div id="result" class="list-card" hidden style="margin-top: 16px;">
+    <h2 id="resultWord"></h2>
+    <p id="resultMeaning"></p>
+    <p class="muted" id="resultExplanation"></p>
+    <p><strong>Example:</strong> <span id="resultExample"></span></p>
+    <p><strong>Translation:</strong> <span id="resultTranslation"></span></p>
+    <p><strong>Similar words:</strong> <span id="resultSimilar"></span></p>
+    <button type="button" id="addBtn" class="secondary" style="margin-top: 12px;">Add to vocabulary</button>
+  </div>
+</section>
+
+<script>
+  let lastResult = null
+
+  document.querySelector("#searchBtn").addEventListener("click", async () => {
+    const word = document.querySelector("#word").value.trim()
+    const statusEl = document.querySelector("#status")
+    const resultEl = document.querySelector("#result")
+
+    if (!word) {
+      statusEl.textContent = "Enter a word to search."
+      return
+    }
+
+    statusEl.textContent = "Searching..."
+    resultEl.hidden = true
+
+    const res = await fetch("/api/dictionary/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ word, language: "{{ profile.target_language }}" }),
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      statusEl.textContent = data.error || "Search failed."
+      return
+    }
+
+    lastResult = data
+    statusEl.textContent = ""
+    resultEl.hidden = false
+    document.querySelector("#resultWord").textContent = data.word
+    document.querySelector("#resultMeaning").textContent = data.meaning
+    document.querySelector("#resultExplanation").textContent = data.simple_explanation
+    document.querySelector("#resultExample").textContent = data.example
+    document.querySelector("#resultTranslation").textContent = data.translation
+    document.querySelector("#resultSimilar").textContent = (data.similar_words || []).join(", ")
+  })
+
+  document.querySelector("#addBtn").addEventListener("click", async () => {
+    if (!lastResult) return
+
+    const res = await fetch("/api/dictionary/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        word: lastResult.word,
+        language: "{{ profile.target_language }}",
+        meaning: lastResult.meaning,
+        example: lastResult.example,
+        topic: lastResult.topic,
+        search_id: lastResult.search_id,
+      }),
+    })
+
+    document.querySelector("#status").textContent = res.ok
+      ? "Added to vocabulary!"
+      : "Failed to add word."
+  })
+</script>
+{% endblock %}

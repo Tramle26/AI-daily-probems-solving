@@ -1,6 +1,8 @@
 from flask import Blueprint, render_template, request, redirect, url_for, g
 
 from extensions import db
+from models import FlashcardDeck, UploadedDocument, VocabularyItem
+from services.documents import extract_text_from_file, save_document
 from services.profile import get_profile, update_streak
 
 bp = Blueprint("main", __name__)
@@ -26,6 +28,8 @@ def require_onboarding():
     if request.endpoint and request.endpoint.startswith("static"):
         return
     if request.endpoint in ("main.onboarding", "flashcards.stream"):
+        return
+    if request.endpoint and request.endpoint.startswith("api."):
         return
     profile = get_profile()
     if profile.goal is None and request.endpoint != "main.onboarding":
@@ -68,28 +72,52 @@ def settings():
     return render_template("settings.html", languages=LANGUAGES, goals=GOALS, profile=profile)
 
 
-# --- Stub pages: real logic added in later Phase 1 steps ---
-
-@bp.get("/dashboard")
+@bp.route("/dashboard")
 def dashboard():
-    return render_template("stub.html", page_title="Dashboard", phase="Phase 1 (Step 1.8)")
+    from services.progress import get_dashboard_summary
+
+    update_streak(g.profile)
+    summary = get_dashboard_summary()
+    return render_template("dashboard.html", profile=g.profile, summary=summary)
 
 
-@bp.get("/upload")
+@bp.route("/upload", methods=["GET", "POST"])
 def upload():
-    return render_template("stub.html", page_title="Upload", phase="Phase 1 (Step 1.4)")
+    if request.method == "POST":
+        language = request.form.get("language") or g.profile.target_language
+        if "file" in request.files and request.files["file"].filename:
+            filename, text = extract_text_from_file(request.files["file"])
+        else:
+            filename, text = "paste.txt", request.form.get("text", "").strip()
+        if not text:
+            return render_template("upload.html", languages=LANGUAGES, error="No text found.")
+        doc = save_document(filename, text, language)
+        return redirect(url_for("main.upload_preview", doc_id=doc.id))
+    return render_template("upload.html", languages=LANGUAGES)
 
 
-@bp.get("/quiz")
+@bp.route("/upload/<int:doc_id>")
+def upload_preview(doc_id):
+    doc = UploadedDocument.query.get_or_404(doc_id)
+    return render_template("upload_preview.html", doc=doc)
+
+
+@bp.route("/quiz")
 def quiz():
-    return render_template("stub.html", page_title="Quiz", phase="Phase 1 (Step 1.7)")
+    decks = FlashcardDeck.query.order_by(FlashcardDeck.created_at.desc()).limit(20).all()
+    return render_template("quiz.html", decks=decks)
 
 
-@bp.get("/dictionary")
+@bp.route("/dictionary")
 def dictionary():
-    return render_template("stub.html", page_title="Dictionary", phase="Phase 1 (Step 1.6)")
+    return render_template("dictionary.html", profile=g.profile)
 
 
-@bp.get("/history")
+@bp.route("/history")
 def history():
-    return render_template("stub.html", page_title="History", phase="Phase 1 (Step 1.5)")
+    status = request.args.get("status")
+    query = VocabularyItem.query.order_by(VocabularyItem.first_seen_at.desc())
+    if status:
+        query = query.filter_by(mastery_status=status)
+    items = query.limit(200).all()
+    return render_template("history.html", items=items, status=status)

@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Dashboard</h1>
+  <p class="muted">Learning {{ profile.target_language }} · {{ profile.goal or "No goal set" }}</p>
+
+  <div class="stat-grid">
+    <div class="stat-card">
+      <span class="muted">Words learned</span>
+      <strong>{{ summary.total }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="muted">Mastered</span>
+      <strong>{{ summary.mastered }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="muted">Weak</span>
+      <strong>{{ summary.weak }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="muted">Quiz accuracy (7d)</span>
+      <strong>{{ summary.accuracy }}%</strong>
+    </div>
+    <div class="stat-card">
+      <span class="muted">Streak</span>
+      <strong>{{ profile.streak_days or 0 }} days</strong>
+    </div>
+  </div>
+
+  <div class="section-grid">
+    <div class="list-card">
+      <h2>Recent decks</h2>
+      {% if summary.recent_decks %}
+      <ul>
+        {% for deck in summary.recent_decks %}
+        <li>{{ deck.title }} ({{ deck.language }})</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">No decks saved yet.</p>
+      {% endif %}
+    </div>
+
+    <div class="list-card">
+      <h2>Recent uploads</h2>
+      {% if summary.recent_uploads %}
+      <ul>
+        {% for doc in summary.recent_uploads %}
+        <li><a href="{{ url_for('main.upload_preview', doc_id=doc.id) }}">{{ doc.filename }}</a></li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">No uploads yet.</p>
+      {% endif %}
+    </div>
+
+    <div class="list-card">
+      <h2>Weak words</h2>
+      {% if summary.weak_items %}
+      <ul>
+        {% for item in summary.weak_items %}
+        <li>{{ item.word }} — {{ item.meaning or "—" }}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">No weak words right now.</p>
+      {% endif %}
+    </div>
+
+    <div class="list-card">
+      <h2>Recommended next</h2>
+      <p class="muted">{{ summary.recommendation.hint }}</p>
+      <p><a href="{{ url_for(summary.recommendation.url) }}">{{ summary.recommendation.label }}</a></p>
+    </div>
+  </div>
+</section>
+{% endblock %}
