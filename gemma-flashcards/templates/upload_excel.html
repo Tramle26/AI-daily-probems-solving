@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Excel Upload — Gemma Learning{% endblock %}
+{% block title %}Excel Upload | Gemma Learning{% endblock %}
 {% block content %}
 <section class="panel">
   <h1>Upload Excel vocabulary</h1>
@@ -23,7 +23,14 @@
       </select>
     </label>
     <label>Excel file (.xlsx)
-      <input type="file" name="file" accept=".xlsx,.xls" required />
+      <div class="file-picker" data-file-picker>
+        <input type="file" name="file" accept=".xlsx,.xls" required />
+        <div class="file-picker-empty">Choose a file…</div>
+        <div class="file-picker-selected" hidden>
+          <span class="file-picker-name"></span>
+          <button type="button" class="file-picker-remove" aria-label="Remove file">Remove</button>
+        </div>
+      </div>
     </label>
     <button type="submit" class="primary">Upload and preview</button>
   </form>
@@ -45,7 +52,7 @@
     {% for field in column_fields %}
     <label>{{ field | capitalize }}
       <select name="{{ field }}">
-        <option value="">— skip —</option>
+        <option value="">(skip)</option>
         {% for header in headers %}
         <option value="{{ header }}" {% if guessed.get(field) == header %}selected{% endif %}>{{ header }}</option>
         {% endfor %}
@@ -74,7 +81,40 @@
     </table>
 
     <button type="submit" class="primary">Confirm and save deck</button>
+    <button type="submit" class="secondary" name="step" value="cancel">Choose different file</button>
   </form>
   {% endif %}
 </section>
+
+{% if step == "upload" %}
+<script>
+  document.querySelectorAll("[data-file-picker]").forEach((picker) => {
+    const input = picker.querySelector('input[type="file"]')
+    const empty = picker.querySelector(".file-picker-empty")
+    const selected = picker.querySelector(".file-picker-selected")
+    const nameEl = picker.querySelector(".file-picker-name")
+    const removeBtn = picker.querySelector(".file-picker-remove")
+
+    function sync() {
+      const file = input.files[0]
+      if (file) {
+        nameEl.textContent = file.name
+        empty.hidden = true
+        selected.hidden = false
+        picker.classList.add("has-file")
+      } else {
+        empty.hidden = false
+        selected.hidden = true
+        picker.classList.remove("has-file")
+      }
+    }
+
+    input.addEventListener("change", sync)
+    removeBtn.addEventListener("click", () => {
+      input.value = ""
+      sync()
+    })
+  })
+</script>
+{% endif %}
 {% endblock %}

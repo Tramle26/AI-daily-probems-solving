@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Review — Gemma Learning{% endblock %}
+{% block title %}Review | Gemma Learning{% endblock %}
 {% block content %}
 <section class="panel">
   <h1>Review session</h1>
@@ -107,7 +107,7 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        source_type: "weak",
+        source_type: "practice",
         quiz_type: "multiple_choice",
         limit: 3,
       }),

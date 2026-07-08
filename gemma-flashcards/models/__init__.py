@@ -7,7 +7,7 @@ class UserProfile(db.Model):
     id = db.Column(db.Integer, primary_key= True)
     target_language= db.Column(db.String(32), nullable = False, default = "French")
     native_language= db.Column(db.String(32), nullable = False, default = "English")
-    level = db.Column(db.String(8))
+    level = db.Column(db.String(16))
     goal= db.Column(db.String(64))
     streak_days= db.Column(db.Integer, default = 0)
     last_active_date= db.Column(db.Date)
@@ -73,6 +73,14 @@ class VocabularyItem(db.Model):
     __table_args__ = (
         db.UniqueConstraint("word", "language", name="uq_word_language"),
     )
+
+
+MASTERY_STATUS_LABELS = {
+    "new": "New",
+    "learning": "Learning",
+    "practice": "Practice",
+    "mastered": "Mastered",
+}
 
 
 class Flashcard(db.Model):

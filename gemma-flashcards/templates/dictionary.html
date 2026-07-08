@@ -1,11 +1,17 @@
 {% extends "base.html" %}
-{% block title %}Dictionary — Gemma Learning{% endblock %}
+{% block title %}Dictionary | Gemma Learning{% endblock %}
 {% block content %}
 <section class="panel">
   <h1>Dictionary</h1>
-  <p class="muted">Look up a word in {{ profile.target_language }} with explanations in {{ profile.native_language }}.</p>
+  <p class="muted" id="lookupHint">Look up a word in {{ profile.target_language }} with explanations in {{ profile.native_language }}.</p>
 
   <div class="form-grid">
+    <label>Look up in
+      <select id="lookupLanguage">
+        <option value="{{ profile.target_language }}">{{ profile.target_language }} (target)</option>
+        <option value="{{ profile.native_language }}">{{ profile.native_language }} (native)</option>
+      </select>
+    </label>
     <label>Word
       <input type="text" id="word" placeholder="Enter a word..." />
     </label>
@@ -26,10 +32,30 @@
 </section>
 
 <script>
+  const targetLanguage = "{{ profile.target_language }}"
+  const nativeLanguage = "{{ profile.native_language }}"
   let lastResult = null
+
+  function updateLookupHint() {
+    const lookupLanguage = document.querySelector("#lookupLanguage").value
+    const hintEl = document.querySelector("#lookupHint")
+    const wordInput = document.querySelector("#word")
+
+    if (lookupLanguage === nativeLanguage) {
+      hintEl.textContent = `Type a word in ${nativeLanguage} to find the ${targetLanguage} equivalent.`
+      wordInput.placeholder = `Enter a ${nativeLanguage} word...`
+    } else {
+      hintEl.textContent = `Look up a word in ${targetLanguage} with explanations in ${nativeLanguage}.`
+      wordInput.placeholder = `Enter a ${targetLanguage} word...`
+    }
+  }
+
+  document.querySelector("#lookupLanguage").addEventListener("change", updateLookupHint)
+  updateLookupHint()
 
   document.querySelector("#searchBtn").addEventListener("click", async () => {
     const word = document.querySelector("#word").value.trim()
+    const lookupLanguage = document.querySelector("#lookupLanguage").value
     const statusEl = document.querySelector("#status")
     const resultEl = document.querySelector("#result")
 
@@ -44,7 +70,7 @@
     const res = await fetch("/api/dictionary/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ word, language: "{{ profile.target_language }}" }),
+      body: JSON.stringify({ word, language: lookupLanguage }),
     })
 
     const data = await res.json()
@@ -72,7 +98,7 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         word: lastResult.word,
-        language: "{{ profile.target_language }}",
+        language: lastResult.vocab_language || targetLanguage,
         meaning: lastResult.meaning,
         example: lastResult.example,
         topic: lastResult.topic,

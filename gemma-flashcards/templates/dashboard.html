@@ -1,5 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — Gemma Learning{% endblock %}
+{% block title %}Dashboard | Gemma Learning{% endblock %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
 {% block content %}
 <section class="panel">
   <h1>Dashboard</h1>
@@ -15,8 +18,8 @@
       <strong>{{ summary.mastered }}</strong>
     </div>
     <div class="stat-card">
-      <span class="muted">Weak</span>
-      <strong>{{ summary.weak }}</strong>
+      <span class="muted">Practice</span>
+      <strong>{{ summary.practice }}</strong>
     </div>
     <div class="stat-card">
       <span class="muted">Quiz accuracy (7d)</span>
@@ -28,51 +31,208 @@
     </div>
   </div>
 
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <div>
+          <h2>New words learned</h2>
+          <p class="muted chart-subtitle">
+            <span id="wordsTotal">{{ charts.words_series.total }}</span> words in this period
+          </p>
+        </div>
+        <div class="range-toggle" role="group" aria-label="Time range">
+          <button type="button" class="range-btn is-active" data-range="week">Week</button>
+          <button type="button" class="range-btn" data-range="month">Month</button>
+          <button type="button" class="range-btn" data-range="year">Year</button>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="wordsChart" aria-label="New words learned over time"></canvas>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <div>
+          <h2>Streak roadmap</h2>
+          <p class="muted chart-subtitle">
+            <span id="activeDays">{{ charts.streak_roadmap.active_days }}</span> active days ·
+            <span id="consistencyPct">{{ charts.streak_roadmap.consistency }}</span>% consistent
+          </p>
+        </div>
+        <div class="streak-badge">
+          <span class="muted">Current streak</span>
+          <strong>{{ profile.streak_days or 0 }} days</strong>
+        </div>
+      </div>
+      <div class="streak-roadmap" id="streakRoadmap" aria-label="Daily activity streak roadmap"></div>
+      <div class="streak-legend">
+        <span class="streak-legend-item"><span class="streak-cell is-empty"></span> No activity</span>
+        <span class="streak-legend-item"><span class="streak-cell is-active"></span> Studied</span>
+      </div>
+    </div>
+  </div>
+
   <div class="section-grid">
     <div class="list-card">
-      <h2>Recent decks</h2>
-      {% if summary.recent_decks %}
+      <h2>Words to study</h2>
+      {% if summary.study_words %}
       <ul>
-        {% for deck in summary.recent_decks %}
-        <li>{{ deck.title }} ({{ deck.language }})</li>
+        {% for item in summary.study_words %}
+        <li>
+          <strong>{{ item.word }}</strong>
+          <span class="muted">· {{ mastery_labels.get(item.mastery_status, item.mastery_status) }}</span>
+          {% if item.meaning %}<br><span class="muted">{{ item.meaning }}</span>{% endif %}
+        </li>
         {% endfor %}
       </ul>
+      <p><a href="{{ url_for('main.library', status='new') }}">Browse library →</a></p>
       {% else %}
-      <p class="muted">No decks saved yet.</p>
+      <p class="muted">No new or learning words yet.</p>
+      <p><a href="{{ url_for('flashcards.index') }}">Generate flashcards →</a></p>
       {% endif %}
     </div>
 
     <div class="list-card">
-      <h2>Recent uploads</h2>
-      {% if summary.recent_uploads %}
-      <ul>
-        {% for doc in summary.recent_uploads %}
-        <li><a href="{{ url_for('main.upload_preview', doc_id=doc.id) }}">{{ doc.filename }}</a></li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="muted">No uploads yet.</p>
+      {% set roadmap = summary.roadmap_progress %}
+      <h2>Learning path</h2>
+      <p class="roadmap-position">
+        Level {{ roadmap.current_level_index }} of {{ roadmap.levels|length }}
+        · <strong>{{ roadmap.current_level_title }}</strong>
+      </p>
+      {% if roadmap.message %}
+      <p class="muted roadmap-note">{{ roadmap.message }}</p>
       {% endif %}
-    </div>
-
-    <div class="list-card">
-      <h2>Weak words</h2>
-      {% if summary.weak_items %}
-      <ul>
-        {% for item in summary.weak_items %}
-        <li>{{ item.word }} — {{ item.meaning or "—" }}</li>
+      <ol class="roadmap-levels">
+        {% for level in roadmap.levels %}
+        <li class="roadmap-level is-{{ level.status }}">
+          <div class="roadmap-level-header">
+            <span class="roadmap-level-marker" aria-hidden="true">
+              {% if level.status == "completed" %}✓{% elif level.status == "active" %}●{% else %}○{% endif %}
+            </span>
+            <div>
+              <strong>{{ level.title }}</strong>
+              {% if level.status == "active" %}
+              <span class="muted">· {{ level.words_mastered }}/{{ level.target_word_count }} words</span>
+              {% elif level.status == "completed" %}
+              <span class="muted">· complete</span>
+              {% else %}
+              <span class="muted">· locked</span>
+              {% endif %}
+            </div>
+          </div>
+          {% if level.status == "active" %}
+          <div class="roadmap-progress-bar" role="progressbar" aria-valuenow="{{ level.progress_pct }}" aria-valuemin="0" aria-valuemax="100" aria-label="{{ level.title }} progress">
+            <span style="width: {{ level.progress_pct }}%"></span>
+          </div>
+          {% endif %}
+        </li>
         {% endfor %}
-      </ul>
-      {% else %}
-      <p class="muted">No weak words right now.</p>
-      {% endif %}
-    </div>
-
-    <div class="list-card">
-      <h2>Recommended next</h2>
-      <p class="muted">{{ summary.recommendation.hint }}</p>
-      <p><a href="{{ url_for(summary.recommendation.url) }}">{{ summary.recommendation.label }}</a></p>
+      </ol>
+      <p><a href="{{ url_for('flashcards.index') }}">Continue studying →</a></p>
     </div>
   </div>
 </section>
+
+<script>
+  (function () {
+    const initialData = {{ charts | tojson }};
+    const chartCanvas = document.getElementById("wordsChart");
+    const roadmapEl = document.getElementById("streakRoadmap");
+    const wordsTotalEl = document.getElementById("wordsTotal");
+    const activeDaysEl = document.getElementById("activeDays");
+    const consistencyEl = document.getElementById("consistencyPct");
+    const rangeButtons = document.querySelectorAll(".range-btn");
+    if (!chartCanvas || !roadmapEl) return;
+
+    let wordsChart = null;
+
+    function renderRoadmap(days) {
+      roadmapEl.innerHTML = "";
+      days.forEach((day) => {
+        const cell = document.createElement("span");
+        cell.className = "streak-cell" + (day.active ? " is-active" : " is-empty");
+        cell.title = day.active
+          ? `${day.label}: studied${day.words ? ` · ${day.words} new word${day.words === 1 ? "" : "s"}` : ""}`
+          : `${day.label}: no activity`;
+        roadmapEl.appendChild(cell);
+      });
+    }
+
+    function renderChart(series) {
+      const labels = series.labels || [];
+      const values = series.values || [];
+      wordsTotalEl.textContent = series.total || 0;
+
+      if (wordsChart) {
+        wordsChart.data.labels = labels;
+        wordsChart.data.datasets[0].data = values;
+        wordsChart.update();
+        return;
+      }
+
+      wordsChart = new Chart(chartCanvas, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [{
+            label: "New words",
+            data: values,
+            borderColor: "#d66b6b",
+            backgroundColor: "rgba(232, 145, 145, 0.18)",
+            fill: true,
+            tension: 0.35,
+            pointRadius: 4,
+            pointBackgroundColor: "#ffd54f",
+            pointBorderColor: "#d66b6b",
+            pointBorderWidth: 2,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+          },
+          scales: {
+            x: {
+              grid: { color: "rgba(245, 208, 208, 0.6)" },
+              ticks: { color: "#9a7070", maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+            },
+            y: {
+              beginAtZero: true,
+              ticks: { stepSize: 1, color: "#9a7070" },
+              grid: { color: "rgba(245, 208, 208, 0.6)" },
+            },
+          },
+        },
+      });
+    }
+
+    function applyCharts(data) {
+      renderChart(data.words_series);
+      renderRoadmap(data.streak_roadmap.days || []);
+      activeDaysEl.textContent = data.streak_roadmap.active_days || 0;
+      consistencyEl.textContent = data.streak_roadmap.consistency || 0;
+    }
+
+    async function loadRange(range) {
+      rangeButtons.forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.range === range);
+      });
+      try {
+        const response = await fetch(`/api/progress/charts?range=${range}`);
+        if (!response.ok) return;
+        applyCharts(await response.json());
+      } catch (_) {
+        /* keep current chart on network errors */
+      }
+    }
+
+    applyCharts(initialData);
+    rangeButtons.forEach((btn) => {
+      btn.addEventListener("click", () => loadRange(btn.dataset.range));
+    });
+  })();
+</script>
 {% endblock %}

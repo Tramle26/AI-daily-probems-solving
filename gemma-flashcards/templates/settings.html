@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Settings — Gemma Learning{% endblock %}
+{% block title %}Settings | Gemma Learning{% endblock %}
 {% block content %}
 <section class="panel">
   <h1>Settings</h1>
@@ -22,8 +22,8 @@
     <label>Level (optional)
       <select name="level">
         <option value="">Not sure yet</option>
-        {% for lvl in ["A1","A2","B1","B2","C1"] %}
-        <option value="{{ lvl }}" {% if profile.level == lvl %}selected{% endif %}>{{ lvl }}</option>
+        {% for value, label in levels %}
+        <option value="{{ value }}" {% if profile.level == value %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
     </label>

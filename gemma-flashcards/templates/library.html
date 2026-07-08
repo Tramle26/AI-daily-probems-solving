@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Library | Gemma Learning{% endblock %}
+{% block extra_head %}
+<style>
+  .panel {
+    background: var(--white);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 24px;
+  }
+
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 16px 0 24px;
+  }
+
+  .filters a {
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .filters a.active,
+  .filters a:hover {
+    background: var(--green);
+    border-color: var(--green);
+    color: var(--white);
+  }
+
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  .history-table th,
+  .history-table td {
+    padding: 12px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .history-table th {
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .empty-state {
+    padding: 32px 0;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  .history-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin: 16px 0;
+  }
+
+  .history-search {
+    display: flex;
+    flex: 1;
+    min-width: 220px;
+    gap: 8px;
+  }
+
+  .history-search input {
+    flex: 1;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: inherit;
+    background: var(--white);
+    color: var(--ink);
+  }
+
+  .history-search button {
+    border: 0;
+    border-radius: 8px;
+    padding: 10px 16px;
+    background: var(--green);
+    color: var(--white);
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .search-meta {
+    margin: 0 0 16px;
+    font-size: 14px;
+  }
+</style>
+{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Library</h1>
+  <p class="muted">Words you've saved from flashcards, uploads, and dictionary lookups.</p>
+
+  <form class="history-toolbar" method="get" action="{{ url_for('main.library') }}">
+    {% if status %}
+    <input type="hidden" name="status" value="{{ status }}" />
+    {% endif %}
+    <div class="history-search">
+      <input
+        type="search"
+        name="q"
+        value="{{ search }}"
+        placeholder="Search by word or topic…"
+        autocomplete="off"
+      />
+      <button type="submit">Search</button>
+    </div>
+  </form>
+
+  <div class="filters">
+    <a href="{{ url_for('main.library', q=search or none) }}" class="{% if not status %}active{% endif %}">All</a>
+    {% for value in ["new", "learning", "practice", "mastered"] %}
+    <a href="{{ url_for('main.library', status=value, q=search or none) }}" class="{% if status == value %}active{% endif %}">{{ mastery_labels.get(value, value) }}</a>
+    {% endfor %}
+  </div>
+
+  {% if search %}
+  <p class="search-meta muted">
+    Showing results for “{{ search }}”
+    {% if items %}({{ items|length }} found){% endif %}
+    · <a href="{{ url_for('main.library', status=status or none) }}">Clear search</a>
+  </p>
+  {% endif %}
+
+  {% if items %}
+  <table class="history-table">
+    <thead>
+      <tr>
+        <th>Word</th>
+        <th>Meaning</th>
+        <th>Topic</th>
+        <th>Status</th>
+        <th>Source</th>
+        <th>Last reviewed</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td><strong>{{ item.word }}</strong></td>
+        <td>{{ item.meaning or "n/a" }}</td>
+        <td>{{ item.topic or "n/a" }}</td>
+        <td>{{ mastery_labels.get(item.mastery_status, item.mastery_status) }}</td>
+        <td>{{ item.source_type or "n/a" }}</td>
+        <td>{{ item.last_reviewed_at.strftime("%Y-%m-%d") if item.last_reviewed_at else "n/a" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">
+    {% if search %}
+    No words match “{{ search }}”. Try a different word or topic.
+    {% else %}
+    No words yet. Generate flashcards to start building your library.
+    {% endif %}
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

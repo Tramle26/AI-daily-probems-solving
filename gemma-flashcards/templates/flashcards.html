@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Flashcards — Gemma Learning{% endblock %}
+{% block title %}Flashcards | Gemma Learning{% endblock %}
 {% block extra_head %}
 <style>
   .app {
@@ -236,6 +236,100 @@
     padding: 24px;
   }
 
+  .study-area {
+    display: grid;
+    gap: 16px;
+  }
+
+  .study-card {
+    min-height: 240px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 24px;
+    background: var(--white);
+    box-shadow: 0 10px 24px rgba(214, 107, 107, 0.1);
+    border-top: 5px solid var(--accent);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    cursor: pointer;
+  }
+
+  .study-card.revealed {
+    border-top-color: var(--star);
+  }
+
+  .study-actions {
+    display: flex;
+    gap: 12px;
+  }
+
+  .know-btn {
+    flex: 1;
+    border: 0;
+    border-radius: 8px;
+    padding: 13px 16px;
+    background: var(--green);
+    color: var(--white);
+    font-weight: 900;
+    cursor: pointer;
+    box-shadow: 0 4px 0 var(--green-dark);
+  }
+
+  .again-btn {
+    flex: 1;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 13px 16px;
+    background: var(--white);
+    color: var(--ink);
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .study-summary {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 24px;
+    background: var(--white);
+    text-align: center;
+  }
+
+  .study-summary a {
+    display: inline-block;
+    margin-top: 12px;
+    color: var(--green);
+    font-weight: 700;
+  }
+
+  .view-toggle {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .view-toggle button {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 6px 14px;
+    background: var(--white);
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .view-toggle button.active {
+    background: var(--green);
+    border-color: var(--green);
+    color: var(--white);
+  }
+
+  .deck-view[hidden],
+  .study-area[hidden] {
+    display: none;
+  }
+
   @media (max-width: 820px) {
     .app {
       grid-template-columns: 1fr;
@@ -317,7 +411,7 @@
       <div>
         <h1>Create Deck</h1>
         <p class="muted">
-          Generate, review, and flip cards as they arrive.
+          Generate a deck, then study one card at a time, like Quizlet.
         </p>
       </div>
 
@@ -329,14 +423,38 @@
       </div>
     </div>
 
-    <div id="cards" class="cards">
+    <div id="viewToggle" class="view-toggle" hidden>
+      <button type="button" id="studyViewBtn" class="active">Study</button>
+      <button type="button" id="browseViewBtn">Browse deck</button>
+    </div>
+
+    <div id="studyArea" class="study-area" hidden>
+      <p id="studyProgress" class="muted"></p>
+      <div id="studyCard" class="study-card" role="button" tabindex="0" aria-label="Tap to reveal answer">
+        <div>
+          <p id="studyHint" class="small">Tap to reveal</p>
+          <div id="studyTerm" class="term"></div>
+        </div>
+        <p id="studyExample" class="small"></p>
+      </div>
+      <div id="studyActions" class="study-actions" hidden>
+        <button type="button" id="knowBtn" class="know-btn">Know it</button>
+        <button type="button" id="againBtn" class="again-btn">Study again</button>
+      </div>
+      <div id="studySummary" class="study-summary" hidden>
+        <h2>Session complete</h2>
+        <p id="summaryText" class="muted"></p>
+        <a href="{{ url_for('main.library') }}">View in library →</a>
+      </div>
+    </div>
+
+    <div id="cards" class="cards deck-view">
       <div class="empty">Choose a language and theme to start a deck.</div>
     </div>
   </section>
 </main>
 
 <script>
-  // Elements we update as the deck streams in.
   const form = document.querySelector("#deckForm")
   const cards = document.querySelector("#cards")
   const message = document.querySelector("#message")
@@ -344,10 +462,26 @@
   const progressFill = document.querySelector("#progressFill")
   const generateButton = document.querySelector("#generate")
   const saveDeckButton = document.querySelector("#saveDeck")
-  let source = null // the open Server-Sent Events connection, if any
-  let generatedCards = []
+  const viewToggle = document.querySelector("#viewToggle")
+  const studyArea = document.querySelector("#studyArea")
+  const studyProgress = document.querySelector("#studyProgress")
+  const studyCard = document.querySelector("#studyCard")
+  const studyHint = document.querySelector("#studyHint")
+  const studyTerm = document.querySelector("#studyTerm")
+  const studyExample = document.querySelector("#studyExample")
+  const studyActions = document.querySelector("#studyActions")
+  const studySummary = document.querySelector("#studySummary")
+  const summaryText = document.querySelector("#summaryText")
+  const studyViewBtn = document.querySelector("#studyViewBtn")
+  const browseViewBtn = document.querySelector("#browseViewBtn")
 
-  // Update the progress bar and its label.
+  let source = null
+  let generatedCards = []
+  let studyQueue = []
+  let knowCount = 0
+  let againCount = 0
+  let studyRevealed = false
+
   function setProgress(current, total) {
     const percent = total ? Math.round((current / total) * 100) : 0
     progressText.textContent = total
@@ -367,7 +501,17 @@
     return element
   }
 
-  // Build one flip-card (front + back faces) and append it to the deck.
+  function setView(mode) {
+    const isStudy = mode === "study"
+    studyArea.hidden = !isStudy
+    cards.hidden = isStudy
+    studyViewBtn.classList.toggle("active", isStudy)
+    browseViewBtn.classList.toggle("active", !isStudy)
+  }
+
+  studyViewBtn.addEventListener("click", () => setView("study"))
+  browseViewBtn.addEventListener("click", () => setView("browse"))
+
   function addCard(card) {
     const button = document.createElement("button")
     button.type = "button"
@@ -393,17 +537,101 @@
 
     inner.append(front, back)
     button.append(inner)
-    // Tapping a card flips it between front and back.
     button.addEventListener("click", () =>
       button.classList.toggle("flipped"),
     )
     cards.append(button)
   }
 
+  function resetStudyState() {
+    studyQueue = generatedCards.map((_, i) => i)
+    knowCount = 0
+    againCount = 0
+    studyRevealed = false
+    studySummary.hidden = true
+    studyCard.hidden = false
+    studyActions.hidden = true
+  }
+
+  function showStudyCard() {
+    if (!studyQueue.length) {
+      finishStudy()
+      return
+    }
+
+    const card = generatedCards[studyQueue[0]]
+    const remaining = studyQueue.length
+    const studied = generatedCards.length - remaining + 1
+
+    studyProgress.textContent = `Card ${studied} of ${generatedCards.length} · ${remaining} left`
+    studyTerm.textContent = studyRevealed ? card.back : card.front
+    studyHint.textContent = studyRevealed ? "Meaning" : "Tap to reveal"
+    studyExample.textContent = studyRevealed ? (card.example || "") : ""
+    studyCard.classList.toggle("revealed", studyRevealed)
+    studyActions.hidden = !studyRevealed
+  }
+
+  function revealStudyCard() {
+    if (studyRevealed || !studyQueue.length) return
+    studyRevealed = true
+    showStudyCard()
+  }
+
+  studyCard.addEventListener("click", revealStudyCard)
+  studyCard.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault()
+      revealStudyCard()
+    }
+  })
+
+  async function submitStudyFeedback(gotIt) {
+    const cardIndex = studyQueue.shift()
+    const card = generatedCards[cardIndex]
+
+    if (card.vocab_id) {
+      await fetch("/api/review/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vocab_id: card.vocab_id, got_it: gotIt }),
+      })
+    }
+
+    if (gotIt) {
+      knowCount += 1
+    } else {
+      againCount += 1
+      studyQueue.push(cardIndex)
+    }
+
+    studyRevealed = false
+    showStudyCard()
+  }
+
+  document.querySelector("#knowBtn").addEventListener("click", () => submitStudyFeedback(true))
+  document.querySelector("#againBtn").addEventListener("click", () => submitStudyFeedback(false))
+
+  function finishStudy() {
+    studyCard.hidden = true
+    studyActions.hidden = true
+    studySummary.hidden = false
+    summaryText.textContent = `You knew ${knowCount} word${knowCount === 1 ? "" : "s"} and marked ${againCount} to study again. All words were saved to your library.`
+    showMessage("Study session complete.")
+  }
+
+  function startStudyMode() {
+    if (!generatedCards.length) return
+    resetStudyState()
+    viewToggle.hidden = false
+    studyArea.hidden = false
+    cards.hidden = true
+    showStudyCard()
+    setView("study")
+  }
+
   form.addEventListener("submit", (event) => {
     event.preventDefault()
 
-    // Close any previous stream and clear the deck.
     if (source) {
       source.close()
     }
@@ -411,15 +639,18 @@
     cards.innerHTML = ""
     generatedCards = []
     saveDeckButton.hidden = true
+    viewToggle.hidden = true
+    studyArea.hidden = true
+    studySummary.hidden = true
+    studyCard.hidden = false
+    cards.hidden = false
     generateButton.disabled = true
     showMessage("Generating...")
     setProgress(0, Number(form.count.value))
 
-    // Open the SSE connection; the form fields ride along as query params.
     const params = new URLSearchParams(new FormData(form))
     source = new EventSource(`/stream?${params.toString()}`)
 
-    // A finished card arrived: add it and nudge the progress bar.
     source.addEventListener("card", (event) => {
       const data = JSON.parse(event.data)
       generatedCards.push(data.card)
@@ -432,15 +663,14 @@
       setProgress(data.current, data.total)
     })
 
-    // The server signalled it's done, so close the connection.
     source.addEventListener("done", () => {
-      showMessage("Deck ready. Tap a card to practice.")
+      showMessage("Deck ready. Tap the card to study. Words saved to library.")
       generateButton.disabled = false
       saveDeckButton.hidden = false
+      startStudyMode()
       source.close()
     })
 
-    // Either a server-sent error (has data) or a dropped connection.
     source.addEventListener("error", (event) => {
       if (event.data) {
         const data = JSON.parse(event.data)
@@ -468,7 +698,7 @@
         cards: generatedCards,
       }),
     })
-    showMessage(res.ok ? "Deck saved to history!" : "Failed to save deck.")
+    showMessage(res.ok ? "Deck saved!" : "Failed to save deck.")
     saveDeckButton.disabled = false
   })
 </script>

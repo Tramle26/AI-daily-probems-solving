@@ -13,6 +13,7 @@ from services.gemma import (
     extract_vocab_from_answer,
 )
 from services.profile import get_profile
+from services.progress import get_progress_charts
 from services.quiz import (
     build_fill_blank,
     build_multiple_choice,
@@ -23,6 +24,12 @@ from services.review import mark_review_feedback
 from services.vocabulary import save_deck, upsert_vocabulary
 
 bp = Blueprint("api", __name__, url_prefix="/api")
+
+
+@bp.get("/progress/charts")
+def progress_charts():
+    range_key = request.args.get("range", "week")
+    return jsonify(get_progress_charts(range_key))
 
 
 @bp.post("/decks")
@@ -52,14 +59,17 @@ def generate_from_document(doc_id):
     if not api_key:
         return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
 
-    client = genai.Client(api_key=api_key)
-    result = extract_document_vocabulary(
-        client,
-        doc.raw_text,
-        doc.language or data["language"],
-        max_words,
-        data.get("native_language", "English"),
-    )
+    try:
+        client = genai.Client(api_key=api_key)
+        result = extract_document_vocabulary(
+            client,
+            doc.raw_text,
+            doc.language or data["language"],
+            max_words,
+            data.get("native_language", "English"),
+        )
+    except Exception as exc:
+        return jsonify({"error": f"Generation failed: {exc}"}), 500
 
     cards = [
         {
@@ -90,24 +100,34 @@ def generate_from_document(doc_id):
 def dictionary_search():
     data = request.get_json()
     word = data["word"].strip()
-    language = data.get("language") or get_profile().target_language
     profile = get_profile()
+    lookup_language = data.get("language") or profile.target_language
+    target_language = profile.target_language
+    native_language = profile.native_language
 
-    related = [v.word for v in VocabularyItem.query.filter_by(language=language).limit(10).all()]
+    related = [
+        v.word
+        for v in VocabularyItem.query.filter_by(language=target_language).limit(10).all()
+    ]
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
 
     client = genai.Client(api_key=api_key)
-    result = dictionary_lookup(client, word, language, profile.native_language, related)
+    result = dictionary_lookup(
+        client, word, lookup_language, target_language, native_language, related
+    )
 
-    search = DictionarySearch(word=word, language=language, result_json=result.model_dump())
+    search = DictionarySearch(
+        word=word, language=lookup_language, result_json=result.model_dump()
+    )
     db.session.add(search)
     db.session.commit()
 
     payload = result.model_dump()
     payload["search_id"] = search.id
+    payload["vocab_language"] = target_language
     return jsonify(payload)
 
 

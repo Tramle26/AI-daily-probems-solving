@@ -21,10 +21,28 @@ def create_app():
     db.init_app(app)
 
     with app.app_context():
-        import models  # noqa: F401 — register all models with SQLAlchemy
+        import models  # noqa: F401, register all models with SQLAlchemy
+        from models import VocabularyItem
+
         db.create_all()
+        VocabularyItem.query.filter_by(mastery_status="weak").update(
+            {"mastery_status": "practice"}
+        )
+        db.session.commit()
 
     from routes import flashcards, main,api
+    from models import MASTERY_STATUS_LABELS
+
+    @app.context_processor
+    def inject_mastery_labels():
+        from services.background import get_background_config
+        from services.profile import get_profile
+
+        profile = get_profile()
+        return {
+            "mastery_labels": MASTERY_STATUS_LABELS,
+            "background_config": get_background_config(profile),
+        }
 
     app.register_blueprint(main.bp)
     app.register_blueprint(flashcards.bp)

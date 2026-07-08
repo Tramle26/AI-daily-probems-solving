@@ -1,6 +1,7 @@
 # services/gemma.py
 import json
 import os
+import re
 
 from google import genai
 from google.genai import types
@@ -11,7 +12,7 @@ GOOGLE_MODEL = "gemma-4-26b-a4b-it"
 LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "gemma3:4b")
 
 
-# --- Pydantic schemas (API response shape from Gemma) ---
+# Pydantic schemas (API response shape from Gemma)
 
 class FlashcardSchema(BaseModel):
     front: str = Field(description="A short word or phrase in the target language.")
@@ -26,7 +27,7 @@ class DeckSchema(BaseModel):
     cards: list[FlashcardSchema] = Field(description="The full set of flashcards.")
 
 
-# --- SSE helpers ---
+# SSE helpers
 
 def sse(event, data):
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -39,7 +40,27 @@ def clean_count(value):
         return 6
 
 
-# --- Prompts ---
+def parse_model_json(text, model_class):
+    """Parse structured model output, tolerating markdown code fences."""
+    cleaned = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned)
+    if fence_match:
+        cleaned = fence_match.group(1).strip()
+    else:
+        cleaned = re.sub(r"```(?:json)?\s*$", "", cleaned).strip()
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned).strip()
+
+    try:
+        return model_class.model_validate_json(cleaned)
+    except Exception:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end > start:
+            return model_class.model_validate_json(cleaned[start : end + 1])
+        raise
+
+
+# Prompts
 
 def build_topic_prompt(
     language,
@@ -74,7 +95,7 @@ Rules:
 """
 
 
-# --- Streaming JSON parser (unchanged from original app.py) ---
+# Streaming JSON parser (unchanged from original app.py)
 
 def stream_cards(text_pieces):
     """Yield each flashcard the moment it is complete in the JSON stream."""
@@ -115,7 +136,7 @@ def stream_cards(text_pieces):
             scanned += 1
 
 
-# --- Provider calls ---
+# Provider calls
 
 def google_cards(client, prompt):
     stream = client.models.generate_content_stream(
@@ -202,20 +223,41 @@ class DictionaryResult(BaseModel):
     common_mistakes: list[str] = []
 
 
-def build_dictionary_prompt(word, language, native_language, related_words=None):
+def build_dictionary_prompt(
+    word, lookup_language, target_language, native_language, related_words=None
+):
     related = ""
     if related_words:
         related = f"\nThe learner has previously studied: {', '.join(related_words)}"
+
+    if lookup_language == native_language:
+        return f"""
+The learner typed a word in {native_language} and wants to learn the {target_language} equivalent.
+Word entered: "{word}"
+Explain everything in {native_language}.{related}
+
+Return JSON with:
+- word: the {target_language} equivalent (what they need to learn)
+- meaning: meaning in {native_language}
+- simple_explanation: beginner-friendly explanation in {native_language}
+- example: example sentence in {target_language}
+- translation: translation of the example in {native_language}
+- topic, difficulty, similar_words (other {target_language} words), common_mistakes
+"""
     return f"""
-Explain the {language} word "{word}" for a language learner.
+Explain the {target_language} word "{word}" for a language learner.
 Explain in {native_language}.{related}
 
 Return: word, meaning, simple_explanation, example, translation, topic, difficulty, similar_words, common_mistakes.
 """
 
 
-def dictionary_lookup(client, word, language, native_language, related_words=None):
-    prompt = build_dictionary_prompt(word, language, native_language, related_words)
+def dictionary_lookup(
+    client, word, lookup_language, target_language, native_language, related_words=None
+):
+    prompt = build_dictionary_prompt(
+        word, lookup_language, target_language, native_language, related_words
+    )
     response = client.models.generate_content(
         model=GOOGLE_MODEL,
         contents=prompt,
@@ -225,7 +267,7 @@ def dictionary_lookup(client, word, language, native_language, related_words=Non
             response_schema=DictionaryResult,
         ),
     )
-    return DictionaryResult.model_validate_json(response.text)
+    return parse_model_json(response.text, DictionaryResult)
 
 def build_document_prompt(text, language, max_words, native_language="English"):
     excerpt = text[:8000]
@@ -251,7 +293,7 @@ def extract_document_vocabulary(client, text, language, max_words, native_langua
             response_schema=VocabularyList,
         ),
     )
-    return VocabularyList.model_validate_json(response.text)
+    return parse_model_json(response.text, VocabularyList)
 
 class ExcelFillResult(BaseModel):
     meaning: str
@@ -277,7 +319,7 @@ def fill_missing_card_fields(client, word, language, native_language):
             response_schema=ExcelFillResult,
         ),
     )
-    return ExcelFillResult.model_validate_json(response.text)
+    return parse_model_json(response.text, ExcelFillResult)
 
 def build_ask_prompt(document_text, question, native_language):
     return f"""
@@ -320,4 +362,4 @@ Answer:
             response_schema=AskVocabSuggestion,
         ),
     )
-    return AskVocabSuggestion.model_validate_json(response.text)
+    return parse_model_json(response.text, AskVocabSuggestion)

@@ -6,6 +6,7 @@ from google import genai
 from extensions import db
 from models import AskHistory, FlashcardDeck, UploadedDocument, VocabularyItem
 from services.documents import (
+    delete_document,
     extract_text_from_file,
     guess_column_map,
     parse_excel,
@@ -27,6 +28,13 @@ GOALS = [
     ("reading_comprehension", "Reading comprehension"),
     ("speaking_writing", "Speaking and writing"),
     ("review", "Review words already learned"),
+]
+LEVELS = [
+    ("beginner", "Beginner"),
+    ("elementary", "Elementary"),
+    ("intermediate", "Intermediate"),
+    ("advanced", "Advanced"),
+    ("expert", "Expert"),
 ]
 
 COLUMN_FIELDS = ["word", "meaning", "example", "topic", "difficulty", "notes"]
@@ -69,6 +77,7 @@ def onboarding():
         "onboarding.html",
         languages=LANGUAGES,
         goals=GOALS,
+        levels=LEVELS,
         profile=profile,
     )
 
@@ -83,16 +92,28 @@ def settings():
         profile.goal = request.form.get("goal") or None
         db.session.commit()
         return redirect(url_for("main.settings"))
-    return render_template("settings.html", languages=LANGUAGES, goals=GOALS, profile=profile)
+    return render_template(
+        "settings.html",
+        languages=LANGUAGES,
+        goals=GOALS,
+        levels=LEVELS,
+        profile=profile,
+    )
 
 
 @bp.route("/dashboard")
 def dashboard():
-    from services.progress import get_dashboard_summary
+    from services.progress import get_dashboard_summary, get_progress_charts
 
     update_streak(g.profile)
-    summary = get_dashboard_summary()
-    return render_template("dashboard.html", profile=g.profile, summary=summary)
+    summary = get_dashboard_summary(g.profile)
+    charts = get_progress_charts("week")
+    return render_template(
+        "dashboard.html",
+        profile=g.profile,
+        summary=summary,
+        charts=charts,
+    )
 
 
 @bp.route("/upload", methods=["GET", "POST"])
@@ -116,6 +137,11 @@ def upload_excel():
 
     if request.method == "GET":
         return render_template("upload_excel.html", languages=LANGUAGES, step="upload")
+
+    if request.form.get("step") == "cancel":
+        session.pop("excel_rows", None)
+        session.pop("excel_headers", None)
+        return redirect(url_for("main.upload_excel"))
 
     if request.form.get("step") == "confirm":
         rows = session.get("excel_rows", [])
@@ -165,6 +191,13 @@ def upload_preview(doc_id):
     return render_template("upload_preview.html", doc=doc)
 
 
+@bp.route("/upload/<int:doc_id>/remove", methods=["POST"])
+def upload_remove(doc_id):
+    doc = UploadedDocument.query.get_or_404(doc_id)
+    delete_document(doc)
+    return redirect(url_for("main.upload"))
+
+
 @bp.route("/quiz")
 def quiz():
     decks = FlashcardDeck.query.order_by(FlashcardDeck.created_at.desc()).limit(20).all()
@@ -176,14 +209,30 @@ def dictionary():
     return render_template("dictionary.html", profile=g.profile)
 
 
-@bp.route("/history")
-def history():
+@bp.route("/library")
+def library():
     status = request.args.get("status")
+    if status == "weak":
+        status = "practice"
+    search = request.args.get("q", "").strip()
     query = VocabularyItem.query.order_by(VocabularyItem.first_seen_at.desc())
     if status:
         query = query.filter_by(mastery_status=status)
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(
+            db.or_(
+                VocabularyItem.word.ilike(pattern),
+                VocabularyItem.topic.ilike(pattern),
+            )
+        )
     items = query.limit(200).all()
-    return render_template("history.html", items=items, status=status)
+    return render_template("library.html", items=items, status=status, search=search)
+
+
+@bp.route("/history")
+def history_redirect():
+    return redirect(url_for("main.library", **request.args))
 
 
 @bp.route("/review")

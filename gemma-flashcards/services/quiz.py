@@ -6,8 +6,8 @@ from models import Flashcard, QuizAnswer, QuizSession, VocabularyItem
 
 
 def get_quiz_pool(source_type, source_id=None, limit=10):
-    if source_type == "weak":
-        items = VocabularyItem.query.filter_by(mastery_status="weak").all()
+    if source_type in ("practice", "weak"):
+        items = VocabularyItem.query.filter_by(mastery_status="practice").all()
     elif source_type == "deck" and source_id:
         items = (
             VocabularyItem.query.join(Flashcard)
@@ -77,7 +77,7 @@ def grade_and_update_mastery(session, answers):
             item.review_count = (item.review_count or 0) + 1
             item.mastery_status = "mastered" if item.review_count >= 2 else "learning"
         else:
-            item.mastery_status = "weak"
+            item.mastery_status = "practice"
 
         item.last_reviewed_at = datetime.utcnow()
         db.session.add(QuizAnswer(

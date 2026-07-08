@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Upload — Gemma Learning{% endblock %}
+{% block title %}Upload | Gemma Learning{% endblock %}
 {% block content %}
 <section class="panel">
   <h1>Upload document</h1>
@@ -18,7 +18,14 @@
       </select>
     </label>
     <label>PDF file (optional)
-      <input type="file" name="file" accept=".pdf,.txt,.md" />
+      <div class="file-picker" data-file-picker>
+        <input type="file" name="file" accept=".pdf,.txt,.md" />
+        <div class="file-picker-empty">Choose a file…</div>
+        <div class="file-picker-selected" hidden>
+          <span class="file-picker-name"></span>
+          <button type="button" class="file-picker-remove" aria-label="Remove file">Remove</button>
+        </div>
+      </div>
     </label>
     <label>Or paste text
       <textarea name="text" placeholder="Paste a paragraph or article here..."></textarea>
@@ -26,4 +33,34 @@
     <button type="submit" class="primary">Upload and preview</button>
   </form>
 </section>
+
+<script>
+  document.querySelectorAll("[data-file-picker]").forEach((picker) => {
+    const input = picker.querySelector('input[type="file"]')
+    const empty = picker.querySelector(".file-picker-empty")
+    const selected = picker.querySelector(".file-picker-selected")
+    const nameEl = picker.querySelector(".file-picker-name")
+    const removeBtn = picker.querySelector(".file-picker-remove")
+
+    function sync() {
+      const file = input.files[0]
+      if (file) {
+        nameEl.textContent = file.name
+        empty.hidden = true
+        selected.hidden = false
+        picker.classList.add("has-file")
+      } else {
+        empty.hidden = false
+        selected.hidden = true
+        picker.classList.remove("has-file")
+      }
+    }
+
+    input.addEventListener("change", sync)
+    removeBtn.addEventListener("click", () => {
+      input.value = ""
+      sync()
+    })
+  })
+</script>
 {% endblock %}

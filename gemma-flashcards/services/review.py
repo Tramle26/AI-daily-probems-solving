@@ -8,7 +8,7 @@ def get_review_queue(limit=15):
     cutoff = datetime.utcnow() - timedelta(days=3)
     return (
         VocabularyItem.query.filter(
-            VocabularyItem.mastery_status.in_(["weak", "learning"]),
+            VocabularyItem.mastery_status.in_(["practice", "learning"]),
             db.or_(
                 VocabularyItem.last_reviewed_at.is_(None),
                 VocabularyItem.last_reviewed_at < cutoff,
@@ -28,6 +28,6 @@ def mark_review_feedback(vocab_id, got_it: bool):
         item.review_count = (item.review_count or 0) + 1
         item.mastery_status = "mastered" if item.review_count >= 2 else "learning"
     else:
-        item.mastery_status = "weak"
+        item.mastery_status = "practice"
     item.last_reviewed_at = datetime.utcnow()
     db.session.commit()

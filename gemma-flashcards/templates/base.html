@@ -5,9 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}Gemma Learning{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
+    <style>
+      :root {
+        --live-blob1: {{ background_config.palette.blob1 }};
+        --live-blob2: {{ background_config.palette.blob2 }};
+        --live-glyph: {{ background_config.palette.glyph }};
+      }
+    </style>
     {% block extra_head %}{% endblock %}
   </head>
   <body>
+    <canvas id="liveBackground" class="live-background" aria-hidden="true"></canvas>
+    <script id="liveBackgroundConfig" type="application/json">{{ background_config | tojson }}</script>
     <header class="site-header">
       <div class="brand">
         <div class="mark"><span class="mark-star">★</span></div>
@@ -37,7 +46,7 @@
           </button>
           <div id="navMenuDropdown" class="nav-menu-dropdown" hidden>
             <a href="{{ url_for('main.dictionary') }}">Dictionary</a>
-            <a href="{{ url_for('main.history') }}">History</a>
+            <a href="{{ url_for('main.library') }}">Library</a>
             <a href="{{ url_for('main.review') }}">Review</a>
             <a href="{{ url_for('main.ask') }}">Ask Gemma</a>
             <a href="{{ url_for('main.settings') }}">Settings</a>
@@ -173,5 +182,6 @@
         showBubble()
       })()
     </script>
+    <script src="{{ url_for('static', filename='js/live-background.js') }}" defer></script>
   </body>
 </html>

@@ -5,9 +5,10 @@ from flask import Blueprint, Response, render_template, request, stream_with_con
 from ollama import ResponseError
 from pydantic import ValidationError
 
+from extensions import db
 from services.gemma import FlashcardSchema, card_stream, clean_count, sse
 from services.profile import get_profile
-from services.vocabulary import build_continuity_context, get_words_by_status
+from services.vocabulary import build_continuity_context, get_words_by_status, upsert_vocabulary
 
 bp = Blueprint("flashcards", __name__)
 
@@ -46,10 +47,22 @@ def stream():
                 except ValidationError:
                     continue
 
+                vocab = upsert_vocabulary(
+                    word=card.front,
+                    language=language,
+                    meaning=card.back,
+                    example=card.example or "",
+                    topic=card.topic or theme,
+                    source_type="topic",
+                )
+                db.session.commit()
+
                 emitted += 1
+                card_payload = card.model_dump()
+                card_payload["vocab_id"] = vocab.id
                 yield sse(
                     "card",
-                    {"index": emitted, "total": count, "card": card.model_dump()},
+                    {"index": emitted, "total": count, "card": card_payload},
                 )
                 yield sse("progress", {"current": emitted, "total": count})
 
