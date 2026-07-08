@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Review — Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Review session</h1>
+  <p class="muted" id="queueCount">{{ items|length }} words in your review queue</p>
+
+  {% if items %}
+  <div id="reviewCard" class="list-card" style="margin-top: 16px; min-height: 180px;">
+    <p class="muted" id="cardProgress"></p>
+    <h2 id="cardWord"></h2>
+    <p id="cardMeaning" hidden></p>
+    <p class="muted" id="cardExample"></p>
+    <button type="button" id="revealBtn" class="secondary">Reveal meaning</button>
+  </div>
+
+  <div id="reviewActions" style="margin-top: 16px; display: flex; gap: 12px;" hidden>
+    <button type="button" id="gotItBtn" class="primary">Got it</button>
+    <button type="button" id="learningBtn" class="secondary">Still learning</button>
+  </div>
+
+  <div id="miniQuiz" hidden style="margin-top: 24px;">
+    <h2>Mini quiz</h2>
+    <p class="muted">Three quick questions from the words you just reviewed.</p>
+    <div id="quizQuestion" class="list-card" style="margin-top: 12px;"></div>
+    <div id="quizOptions" class="form-grid" style="margin-top: 12px;"></div>
+    <p id="quizStatus" class="muted"></p>
+  </div>
+
+  <div id="results" class="list-card" hidden style="margin-top: 24px;">
+    <h2>Session complete</h2>
+    <p id="resultText"></p>
+    <a href="{{ url_for('main.dashboard') }}" class="primary" style="display: inline-block; margin-top: 12px; text-decoration: none;">Back to dashboard</a>
+  </div>
+  {% else %}
+  <p class="muted">No words need review right now. Take a quiz or generate a new deck to build your queue.</p>
+  {% endif %}
+</section>
+
+{% if items %}
+<script>
+  const items = {{ items | map(attribute='id') | list | tojson }}
+  const itemData = {
+    {% for item in items %}
+    {{ item.id }}: {
+      word: {{ item.word | tojson }},
+      meaning: {{ (item.meaning or "") | tojson }},
+      example: {{ (item.example or "") | tojson }},
+    },
+    {% endfor %}
+  }
+
+  let index = 0
+  let quizQuestions = []
+  let quizIndex = 0
+  let quizAnswers = []
+
+  const cardProgress = document.querySelector("#cardProgress")
+  const cardWord = document.querySelector("#cardWord")
+  const cardMeaning = document.querySelector("#cardMeaning")
+  const cardExample = document.querySelector("#cardExample")
+  const revealBtn = document.querySelector("#revealBtn")
+  const reviewActions = document.querySelector("#reviewActions")
+  const miniQuiz = document.querySelector("#miniQuiz")
+  const results = document.querySelector("#results")
+
+  function showCard() {
+    const item = itemData[items[index]]
+    cardProgress.textContent = `Card ${index + 1} of ${items.length}`
+    cardWord.textContent = item.word
+    cardMeaning.textContent = item.meaning
+    cardMeaning.hidden = true
+    cardExample.textContent = item.example || ""
+    revealBtn.hidden = false
+    reviewActions.hidden = true
+  }
+
+  revealBtn.addEventListener("click", () => {
+    cardMeaning.hidden = false
+    revealBtn.hidden = true
+    reviewActions.hidden = false
+  })
+
+  async function submitFeedback(gotIt) {
+    await fetch("/api/review/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vocab_id: items[index], got_it: gotIt }),
+    })
+    index += 1
+    if (index < items.length) {
+      showCard()
+    } else {
+      startMiniQuiz()
+    }
+  }
+
+  document.querySelector("#gotItBtn").addEventListener("click", () => submitFeedback(true))
+  document.querySelector("#learningBtn").addEventListener("click", () => submitFeedback(false))
+
+  async function startMiniQuiz() {
+    document.querySelector("#reviewCard").hidden = true
+    reviewActions.hidden = true
+    miniQuiz.hidden = false
+
+    const res = await fetch("/api/quiz/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_type: "weak",
+        quiz_type: "multiple_choice",
+        limit: 3,
+      }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.questions.length) {
+      document.querySelector("#quizStatus").textContent = "No mini quiz available."
+      results.hidden = false
+      document.querySelector("#resultText").textContent = "Review complete."
+      return
+    }
+    quizQuestions = data.questions.slice(0, 3)
+    window.sessionId = data.session_id
+    showQuizQuestion()
+  }
+
+  function showQuizQuestion() {
+    const q = quizQuestions[quizIndex]
+    document.querySelector("#quizQuestion").innerHTML = `<p><strong>Question ${quizIndex + 1} of ${quizQuestions.length}</strong></p><p>${q.question}</p>`
+    const optionsEl = document.querySelector("#quizOptions")
+    optionsEl.innerHTML = ""
+    q.options.forEach((option) => {
+      const btn = document.createElement("button")
+      btn.type = "button"
+      btn.className = "secondary"
+      btn.textContent = option
+      btn.addEventListener("click", () => {
+        quizAnswers.push({
+          vocab_id: q.vocab_id,
+          question: q.question,
+          user_answer: option,
+          correct: q.correct,
+        })
+        quizIndex += 1
+        if (quizIndex < quizQuestions.length) {
+          showQuizQuestion()
+        } else {
+          finishMiniQuiz()
+        }
+      })
+      optionsEl.appendChild(btn)
+    })
+  }
+
+  async function finishMiniQuiz() {
+    const res = await fetch("/api/review/mini-quiz", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers: quizAnswers }),
+    })
+    const data = await res.json()
+    miniQuiz.hidden = true
+    results.hidden = false
+    document.querySelector("#resultText").textContent = `Review complete. Mini quiz score: ${data.score} / ${data.total}.`
+  }
+
+  showCard()
+</script>
+{% endif %}
+{% endblock %}

@@ -16,7 +16,7 @@
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 20px;
-    box-shadow: 0 12px 30px rgba(25, 45, 16, 0.08);
+    box-shadow: 0 12px 30px rgba(214, 107, 107, 0.1);
   }
 
   .brand {
@@ -144,7 +144,7 @@
     height: 10px;
     overflow: hidden;
     border-radius: 999px;
-    background: #e7efdf;
+    background: var(--accent-soft);
     border: 1px solid var(--line);
   }
 
@@ -201,16 +201,16 @@
     border-radius: 8px;
     padding: 18px;
     background: var(--white);
-    box-shadow: 0 10px 24px rgba(25, 45, 16, 0.07);
+    box-shadow: 0 10px 24px rgba(214, 107, 107, 0.1);
   }
 
   .front {
-    border-top: 5px solid var(--green);
+    border-top: 5px solid var(--accent);
   }
 
   .back {
     transform: rotateY(180deg);
-    border-top: 5px solid #1cb0f6;
+    border-top: 5px solid var(--star);
   }
 
   .term {
@@ -256,7 +256,7 @@
 <main class="app">
   <form id="deckForm" class="builder">
     <div class="brand">
-      <div class="mark">G</div>
+      <div class="mark"><span class="mark-star">★</span></div>
       <div>
         <h2>Gemma Cards</h2>
         <p class="muted">Thematic language practice</p>

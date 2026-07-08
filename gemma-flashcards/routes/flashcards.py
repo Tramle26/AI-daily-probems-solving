@@ -2,19 +2,12 @@
 import os
 
 from flask import Blueprint, Response, render_template, request, stream_with_context
-from google import genai
-from ollama import Client as OllamaClient
 from ollama import ResponseError
 from pydantic import ValidationError
 
-from services.gemma import (
-    FlashcardSchema,
-    card_stream,
-    clean_count,
-    sse,
-)
+from services.gemma import FlashcardSchema, card_stream, clean_count, sse
 from services.profile import get_profile
-from services.vocabulary import get_words_by_status
+from services.vocabulary import build_continuity_context, get_words_by_status
 
 bp = Blueprint("flashcards", __name__)
 
@@ -36,6 +29,7 @@ def stream():
         try:
             profile = get_profile()
             exclude = get_words_by_status(language, "mastered")
+            continuity = build_continuity_context(theme, language)
 
             emitted = 0
             for card_data in card_stream(
@@ -45,6 +39,7 @@ def stream():
                 provider,
                 exclude_words=exclude,
                 native_language=profile.native_language,
+                continuity_context=continuity,
             ):
                 try:
                     card = FlashcardSchema.model_validate(card_data)

@@ -4,8 +4,14 @@ from flask import Blueprint, jsonify, request
 from google import genai
 
 from extensions import db
-from models import DictionarySearch, QuizSession, UploadedDocument, VocabularyItem
-from services.gemma import dictionary_lookup, extract_document_vocabulary
+from models import AskHistory, DictionarySearch, QuizSession, UploadedDocument, VocabularyItem
+from services.documents import keyword_search_chunks
+from services.gemma import (
+    ask_document,
+    dictionary_lookup,
+    extract_document_vocabulary,
+    extract_vocab_from_answer,
+)
 from services.profile import get_profile
 from services.quiz import (
     build_fill_blank,
@@ -13,6 +19,7 @@ from services.quiz import (
     get_quiz_pool,
     grade_and_update_mastery,
 )
+from services.review import mark_review_feedback
 from services.vocabulary import save_deck, upsert_vocabulary
 
 bp = Blueprint("api", __name__, url_prefix="/api")
@@ -153,3 +160,70 @@ def quiz_submit():
     score, total = grade_and_update_mastery(session, data["answers"])
     accuracy = round(score / total * 100) if total else 0
     return jsonify({"score": score, "total": total, "accuracy": accuracy})
+
+
+@bp.post("/review/feedback")
+def review_feedback():
+    data = request.get_json()
+    mark_review_feedback(data["vocab_id"], data["got_it"])
+    return jsonify({"ok": True})
+
+
+@bp.post("/review/mini-quiz")
+def review_mini_quiz():
+    data = request.get_json()
+    session = QuizSession(source_type="review", quiz_type="multiple_choice")
+    db.session.add(session)
+    db.session.flush()
+    score, total = grade_and_update_mastery(session, data["answers"])
+    return jsonify({"score": score, "total": total})
+
+
+@bp.post("/ask")
+def api_ask():
+    data = request.get_json()
+    doc = UploadedDocument.query.get_or_404(data["document_id"])
+    profile = get_profile()
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    client = genai.Client(api_key=api_key)
+    snippets = keyword_search_chunks(doc.raw_text, data["question"])
+    context = "\n\n".join(snippets) if snippets else doc.raw_text[:8000]
+    answer = ask_document(client, context, data["question"], profile.native_language)
+
+    entry = AskHistory(document_id=doc.id, question=data["question"], answer=answer)
+    db.session.add(entry)
+    db.session.commit()
+
+    return jsonify({"answer": answer, "ask_id": entry.id})
+
+
+@bp.post("/ask/<int:ask_id>/make-cards")
+def ask_make_cards(ask_id):
+    entry = AskHistory.query.get_or_404(ask_id)
+    doc = entry.document
+    profile = get_profile()
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    client = genai.Client(api_key=api_key)
+    suggestions = extract_vocab_from_answer(
+        client, entry.answer, doc.language, profile.native_language
+    )
+    cards = [
+        {"front": w.word, "back": w.meaning, "example": w.example, "topic": w.topic}
+        for w in suggestions.words
+    ]
+    deck = save_deck(
+        f"From: {entry.question[:40]}",
+        doc.language,
+        "ask",
+        cards,
+        document_id=doc.id,
+    )
+    return jsonify({"deck_id": deck.id, "cards": cards})

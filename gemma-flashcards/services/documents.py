@@ -24,3 +24,68 @@ def save_document(filename, text, language):
     db.session.add(doc)
     db.session.commit()
     return doc
+
+import openpyxl
+def keyword_search_chunks(text, query, context_chars=400):
+    """Simple fallback until Phase 2b embeddings."""
+    query_lower = query.lower()
+    hits = []
+    start = 0
+    while True:
+        idx = text.lower().find(query_lower, start)
+        if idx == -1:
+            break
+        snippet = text[max(0, idx - context_chars): idx + context_chars]
+        hits.append(snippet.strip())
+        start = idx + len(query_lower)
+    return hits[:5]
+
+
+def parse_excel(file_storage):
+    wb = openpyxl.load_workbook(file_storage, read_only=True)
+    sheet = wb.active
+    rows_iter = sheet.iter_rows(values_only=True)
+    headers = [str(h).strip().lower() if h else "" for h in next(rows_iter)]
+    rows = []
+    for row in rows_iter:
+        if not any(row):
+            continue
+        rows.append({headers[i]: (row[i] or "") for i in range(min(len(headers), len(row)))})
+    return headers, rows
+
+
+COLUMN_ALIASES = {
+    "word": {"word", "term", "vocabulary", "front"},
+    "meaning": {"meaning", "definition", "back", "translation"},
+    "example": {"example", "sentence"},
+    "topic": {"topic", "theme", "category"},
+    "difficulty": {"difficulty", "level"},
+    "notes": {"notes", "note"},
+}
+
+
+def guess_column_map(headers):
+    mapping = {}
+    normalized = {h: h.lower().strip() for h in headers}
+    for field, aliases in COLUMN_ALIASES.items():
+        for header, norm in normalized.items():
+            if norm in aliases:
+                mapping[field] = header
+                break
+    return mapping
+
+
+def rows_to_cards(rows, column_map):
+    cards = []
+    for row in rows:
+        word = str(row.get(column_map.get("word", ""), "")).strip()
+        if not word:
+            continue
+        cards.append({
+            "front": word,
+            "back": str(row.get(column_map.get("meaning", ""), "")).strip(),
+            "example": str(row.get(column_map.get("example", ""), "")).strip(),
+            "topic": str(row.get(column_map.get("topic", ""), "")).strip(),
+            "difficulty": str(row.get(column_map.get("difficulty", ""), "")).strip() or "beginner",
+        })
+    return cards

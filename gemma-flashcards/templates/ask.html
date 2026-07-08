@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Ask Gemma — Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Ask Gemma</h1>
+  <p class="muted">Ask questions about your uploaded documents.</p>
+
+  <div class="section-grid">
+    <div>
+      <div class="form-grid">
+        <label>Document
+          <select id="documentId">
+            {% for doc in documents %}
+            <option value="{{ doc.id }}">{{ doc.filename }} ({{ doc.language or "unknown" }})</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Your question
+          <textarea id="question" placeholder="What vocabulary appears in chapter 2?"></textarea>
+        </label>
+        <button type="button" id="askBtn" class="primary" {% if not documents %}disabled{% endif %}>Ask</button>
+      </div>
+
+      <div id="answerPanel" class="list-card" hidden style="margin-top: 16px;">
+        <h2>Answer</h2>
+        <p id="answerText"></p>
+        <button type="button" id="makeCardsBtn" class="secondary" style="margin-top: 12px;">Make flashcards from this answer</button>
+      </div>
+
+      <p id="status" class="muted" style="margin-top: 12px;"></p>
+      {% if not documents %}
+      <p class="muted">Upload a document first to use Ask Gemma.</p>
+      {% endif %}
+    </div>
+
+    <div class="list-card">
+      <h2>Recent questions</h2>
+      {% if history %}
+      <ul>
+        {% for entry in history %}
+        <li>
+          <strong>{{ entry.question[:60] }}{% if entry.question|length > 60 %}...{% endif %}</strong>
+          <p class="muted">{{ entry.created_at.strftime("%Y-%m-%d %H:%M") if entry.created_at else "" }}</p>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">No questions yet.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<script>
+  let lastAskId = null
+
+  document.querySelector("#askBtn")?.addEventListener("click", async () => {
+    const statusEl = document.querySelector("#status")
+    const answerPanel = document.querySelector("#answerPanel")
+    const question = document.querySelector("#question").value.trim()
+
+    if (!question) {
+      statusEl.textContent = "Enter a question."
+      return
+    }
+
+    statusEl.textContent = "Thinking..."
+    answerPanel.hidden = true
+
+    const res = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        document_id: Number(document.querySelector("#documentId").value),
+        question,
+      }),
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      statusEl.textContent = data.error || "Ask failed."
+      return
+    }
+
+    lastAskId = data.ask_id
+    statusEl.textContent = ""
+    answerPanel.hidden = false
+    document.querySelector("#answerText").textContent = data.answer
+  })
+
+  document.querySelector("#makeCardsBtn")?.addEventListener("click", async () => {
+    if (!lastAskId) return
+    const statusEl = document.querySelector("#status")
+    statusEl.textContent = "Creating flashcards..."
+
+    const res = await fetch(`/api/ask/${lastAskId}/make-cards`, { method: "POST" })
+    const data = await res.json()
+    statusEl.textContent = res.ok
+      ? `Deck #${data.deck_id} created with ${data.cards.length} cards.`
+      : (data.error || "Failed to create deck.")
+  })
+</script>
+{% endblock %}

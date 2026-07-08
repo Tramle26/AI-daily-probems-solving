@@ -67,3 +67,21 @@ def save_deck(title, language, source_type, cards, source_id=None, document_id=N
 
     db.session.commit()
     return deck
+
+def get_related_by_topic(theme, language, limit=15):
+    """Find prior vocabulary whose topic overlaps the new theme (simple keyword match)."""
+    keyword = theme.split()[0].lower()  # e.g. "soccer" or "World"
+    return (
+        VocabularyItem.query.filter_by(language=language)
+        .filter(VocabularyItem.topic.ilike(f"%{keyword}%"))
+        .limit(limit)
+        .all()
+    )
+
+
+def build_continuity_context(theme, language):
+    prior = get_related_by_topic(theme, language)
+    if not prior:
+        return ""
+    words = ", ".join(v.word for v in prior)
+    return f"\nThe learner previously studied related vocabulary: {words}. Use these to build examples and connections where helpful."

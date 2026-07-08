@@ -10,24 +10,168 @@
   <body>
     <header class="site-header">
       <div class="brand">
-        <div class="mark">G</div>
+        <div class="mark"><span class="mark-star">★</span></div>
         <div>
           <strong>Gemma Learning</strong>
           <span class="muted">Language memory system</span>
         </div>
       </div>
       <nav class="nav">
-        <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
-        <a href="{{ url_for('main.upload') }}">Upload</a>
-        <a href="{{ url_for('flashcards.index') }}">Flashcards</a>
-        <a href="{{ url_for('main.quiz') }}">Quiz</a>
-        <a href="{{ url_for('main.dictionary') }}">Dictionary</a>
-        <a href="{{ url_for('main.history') }}">History</a>
-        <a href="{{ url_for('main.settings') }}">Settings</a>
+        <div class="nav-primary">
+          <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
+          <a href="{{ url_for('main.upload') }}">Upload</a>
+          <a href="{{ url_for('flashcards.index') }}">Flashcards</a>
+          <a href="{{ url_for('main.quiz') }}">Quiz</a>
+        </div>
+        <div class="nav-menu">
+          <button
+            type="button"
+            class="nav-menu-btn"
+            aria-expanded="false"
+            aria-controls="navMenuDropdown"
+            aria-label="More pages"
+          >
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <div id="navMenuDropdown" class="nav-menu-dropdown" hidden>
+            <a href="{{ url_for('main.dictionary') }}">Dictionary</a>
+            <a href="{{ url_for('main.history') }}">History</a>
+            <a href="{{ url_for('main.review') }}">Review</a>
+            <a href="{{ url_for('main.ask') }}">Ask Gemma</a>
+            <a href="{{ url_for('main.settings') }}">Settings</a>
+          </div>
+        </div>
       </nav>
     </header>
     <main class="container">
       {% block content %}{% endblock %}
     </main>
+
+    <aside class="mascot-corner" aria-hidden="true">
+      <p class="mascot-bubble" id="mascotBubble">You got this!</p>
+      <div class="mascot-stage">
+        <span class="mascot-sparkle sparkle-a">★</span>
+        <span class="mascot-sparkle sparkle-b">★</span>
+        <span class="mascot-sparkle sparkle-c">★</span>
+        <svg class="mascot-svg" viewBox="0 0 120 150" role="img" aria-label="Encouraging star mascot">
+          <defs>
+            <linearGradient id="starBodyGrad" x1="60" y1="16" x2="60" y2="98" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#f5bcbc"/>
+              <stop offset="100%" stop-color="#e89191"/>
+            </linearGradient>
+            <linearGradient id="faceGrad" x1="60" y1="37" x2="60" y2="79" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#ffe082"/>
+              <stop offset="100%" stop-color="#ffd54f"/>
+            </linearGradient>
+          </defs>
+          <g class="mascot-star-body">
+            <path
+              fill="url(#starBodyGrad)"
+              stroke="#e07f7f"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+              stroke-linecap="round"
+              d="M60 18
+                 C66 34 74 40 88 43
+                 C102 46 108 48 100 55
+                 C90 61 86 68 88 80
+                 C90 92 80 96 68 92
+                 C64 88 62 84 60 90
+                 C58 84 56 88 52 92
+                 C40 96 30 92 32 80
+                 C34 68 30 61 20 55
+                 C12 48 18 46 32 43
+                 C46 40 54 34 60 18 Z"
+            />
+          </g>
+          <circle cx="60" cy="58" r="20" fill="url(#faceGrad)" stroke="#f0c040" stroke-width="1.4"/>
+          <ellipse cx="52.5" cy="56.5" rx="2.8" ry="4.2" fill="#5c2e2e"/>
+          <ellipse cx="67.5" cy="56.5" rx="2.8" ry="4.2" fill="#5c2e2e"/>
+          <path d="M50 66 Q60 73 70 66" fill="none" stroke="#5c2e2e" stroke-width="2" stroke-linecap="round"/>
+          <g class="mascot-arm-left">
+            <ellipse cx="16" cy="70" rx="9" ry="8" fill="#ffd54f" stroke="#f0c040" stroke-width="1.2"/>
+          </g>
+          <g class="mascot-arm-right">
+            <ellipse cx="104" cy="66" rx="9" ry="8" fill="#ffd54f" stroke="#f0c040" stroke-width="1.2"/>
+          </g>
+          <ellipse cx="41" cy="120" rx="10" ry="7" fill="#ffd54f" stroke="#f0c040" stroke-width="1.2"/>
+          <ellipse cx="79" cy="120" rx="10" ry="7" fill="#ffd54f" stroke="#f0c040" stroke-width="1.2"/>
+        </svg>
+      </div>
+    </aside>
+
+    <script>
+      (function () {
+        const menuBtn = document.querySelector(".nav-menu-btn")
+        const menuDropdown = document.getElementById("navMenuDropdown")
+        if (menuBtn && menuDropdown) {
+          function closeMenu() {
+            menuBtn.setAttribute("aria-expanded", "false")
+            menuDropdown.hidden = true
+          }
+
+          menuBtn.addEventListener("click", (event) => {
+            event.stopPropagation()
+            const open = menuBtn.getAttribute("aria-expanded") === "true"
+            menuBtn.setAttribute("aria-expanded", String(!open))
+            menuDropdown.hidden = open
+          })
+
+          menuDropdown.addEventListener("click", (event) => {
+            if (event.target.closest("a")) closeMenu()
+          })
+
+          document.addEventListener("click", (event) => {
+            if (!menuBtn.contains(event.target) && !menuDropdown.contains(event.target)) {
+              closeMenu()
+            }
+          })
+
+          document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") closeMenu()
+          })
+        }
+      })()
+
+      ;(function () {
+        const lines = [
+          "You got this!",
+          "Keep going!",
+          "One step!",
+          "Nice work!",
+          "Stay curious!",
+          "Great job!",
+        ]
+        const SHOW_MS = 30 * 1000
+        const HIDE_MS = 30 * 60 * 1000
+
+        const bubble = document.getElementById("mascotBubble")
+        if (!bubble) return
+
+        let index = 0
+        let showTimer = null
+        let hideTimer = null
+
+        function pickQuote() {
+          bubble.textContent = lines[index]
+          index = (index + 1) % lines.length
+        }
+
+        function showBubble() {
+          pickQuote()
+          bubble.classList.remove("is-hidden")
+          hideTimer = setTimeout(hideBubble, SHOW_MS)
+        }
+
+        function hideBubble() {
+          bubble.classList.add("is-hidden")
+          showTimer = setTimeout(showBubble, HIDE_MS)
+        }
+
+        showBubble()
+      })()
+    </script>
   </body>
 </html>

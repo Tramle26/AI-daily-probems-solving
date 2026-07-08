@@ -140,3 +140,17 @@ class ProgressSnapshot(db.Model):
     words_mastered = db.Column(db.Integer, default=0)
     quiz_accuracy = db.Column(db.Float, default=0.0)
     time_spent_minutes = db.Column(db.Integer, default=0)
+
+class AskHistory(db.Model):
+    __tablename__ = "ask_history"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("uploaded_document.id"))
+    question = db.Column(db.Text, nullable=False)
+    answer = db.Column(db.Text, nullable=False)
+    related_words = db.Column(db.JSON, default=list)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    document = db.relationship("UploadedDocument", backref="questions")
+
+

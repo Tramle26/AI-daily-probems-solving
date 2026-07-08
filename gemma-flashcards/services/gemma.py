@@ -41,7 +41,14 @@ def clean_count(value):
 
 # --- Prompts ---
 
-def build_topic_prompt(language, theme, count, exclude_words=None, native_language="English"):
+def build_topic_prompt(
+    language,
+    theme,
+    count,
+    exclude_words=None,
+    native_language="English",
+    continuity_context="",
+):
     exclude = ""
     if exclude_words:
         exclude = f"\nDo NOT include these already-known words: {', '.join(exclude_words)}"
@@ -51,6 +58,7 @@ Explain meanings in {native_language}.
 
 Theme: {theme}
 {exclude}
+{continuity_context}
 
 Each flashcard has:
 - front: a short word or phrase in {language}
@@ -139,9 +147,24 @@ def local_cards(client, prompt):
     return (chunk.message.content for chunk in stream if chunk.message.content)
 
 
-def card_stream(language, theme, count, provider="google", exclude_words=None, native_language="English"):
+def card_stream(
+    language,
+    theme,
+    count,
+    provider="google",
+    exclude_words=None,
+    native_language="English",
+    continuity_context="",
+):
     """Return an iterator of raw card dicts from the chosen provider."""
-    prompt = build_topic_prompt(language, theme, count, exclude_words, native_language)
+    prompt = build_topic_prompt(
+        language,
+        theme,
+        count,
+        exclude_words,
+        native_language,
+        continuity_context,
+    )
 
     if provider == "local":
         client = OllamaClient()
@@ -229,3 +252,72 @@ def extract_document_vocabulary(client, text, language, max_words, native_langua
         ),
     )
     return VocabularyList.model_validate_json(response.text)
+
+class ExcelFillResult(BaseModel):
+    meaning: str
+    example: str
+    topic: str = ""
+
+
+def build_excel_fill_prompt(word, language, native_language):
+    return f"""
+The learner uploaded a vocabulary list. For the {language} word "{word}", provide:
+meaning (in {native_language}), example sentence, and topic tag.
+"""
+
+
+def fill_missing_card_fields(client, word, language, native_language):
+    prompt = build_excel_fill_prompt(word, language, native_language)
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.4,
+            response_mime_type="application/json",
+            response_schema=ExcelFillResult,
+        ),
+    )
+    return ExcelFillResult.model_validate_json(response.text)
+
+def build_ask_prompt(document_text, question, native_language):
+    return f"""
+Answer this question using ONLY the document below.
+Explain in {native_language} when helpful.
+If the answer is not in the document, say so clearly.
+
+Document:
+{document_text[:8000]}
+
+Question: {question}
+"""
+
+
+def ask_document(client, document_text, question, native_language):
+    prompt = build_ask_prompt(document_text, question, native_language)
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(temperature=0.3),
+    )
+    return response.text
+
+class AskVocabSuggestion(BaseModel):
+    words: list[VocabularyEntry]
+
+
+def extract_vocab_from_answer(client, answer, language, native_language):
+    prompt = f"""
+From this study answer, list key {language} vocabulary items with meanings in {native_language}.
+
+Answer:
+{answer}
+"""
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=AskVocabSuggestion,
+        ),
+    )
+    return AskVocabSuggestion.model_validate_json(response.text)

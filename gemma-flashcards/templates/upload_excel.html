@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Excel Upload — Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Upload Excel vocabulary</h1>
+  <p class="muted">Import a spreadsheet, map columns, and save as a flashcard deck.</p>
+
+  {% if error %}
+  <p class="error">{{ error }}</p>
+  {% endif %}
+
+  {% if step == "upload" %}
+  <form method="post" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="step" value="preview" />
+    <label>Deck title
+      <input type="text" name="title" value="Excel deck" required />
+    </label>
+    <label>Language
+      <select name="language">
+        {% for lang in languages %}
+        <option value="{{ lang }}">{{ lang }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Excel file (.xlsx)
+      <input type="file" name="file" accept=".xlsx,.xls" required />
+    </label>
+    <button type="submit" class="primary">Upload and preview</button>
+  </form>
+  {% else %}
+  <form method="post" class="form-grid">
+    <input type="hidden" name="step" value="confirm" />
+    <label>Deck title
+      <input type="text" name="title" value="Excel deck" required />
+    </label>
+    <label>Language
+      <select name="language">
+        {% for lang in languages %}
+        <option value="{{ lang }}">{{ lang }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <h2>Map columns</h2>
+    {% for field in column_fields %}
+    <label>{{ field | capitalize }}
+      <select name="{{ field }}">
+        <option value="">— skip —</option>
+        {% for header in headers %}
+        <option value="{{ header }}" {% if guessed.get(field) == header %}selected{% endif %}>{{ header }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endfor %}
+
+    <h2>Preview (first 5 rows)</h2>
+    <table class="history-table">
+      <thead>
+        <tr>
+          {% for header in headers %}
+          <th>{{ header }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          {% for header in headers %}
+          <td>{{ row.get(header, "") }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <button type="submit" class="primary">Confirm and save deck</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}
