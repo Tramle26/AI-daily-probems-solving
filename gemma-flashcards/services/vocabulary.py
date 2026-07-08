@@ -1,5 +1,6 @@
 from extensions import db
 from models import Flashcard, FlashcardDeck, VocabularyItem
+from services.embeddings import cosine_similarity, embed_text
 
 
 def get_words_by_status(language, status):
@@ -52,6 +53,10 @@ def save_deck(title, language, source_type, cards, source_id=None, document_id=N
             source_id=deck.id,
             document_id=document_id,
         )
+        try:
+            embed_vocabulary_item(vocab)
+        except Exception:
+            pass  # never block deck save on a slow/broken embedding model
         db.session.add(
             Flashcard(
                 deck_id=deck.id,
@@ -85,3 +90,41 @@ def build_continuity_context(theme, language):
         return ""
     words = ", ".join(v.word for v in prior)
     return f"\nThe learner previously studied related vocabulary: {words}. Use these to build examples and connections where helpful."
+
+
+def embed_vocabulary_item(item):
+    text = f"{item.word}: {item.meaning or ''}. {item.example or ''}"
+    item.embedding_blob = embed_text(text)
+
+
+def embed_vocabulary_item_if_missing(item):
+    if not item.embedding_blob:
+        embed_vocabulary_item(item)
+
+
+def find_similar_vocab(word, language, top_k=5, exclude_word=None):
+    query_vec = embed_text(word)
+    if not query_vec:
+        return []
+
+    items = VocabularyItem.query.filter_by(language=language).filter(
+        VocabularyItem.embedding_blob.isnot(None)
+    ).all()
+
+    scored = []
+    for item in items:
+        if exclude_word and item.word.lower() == exclude_word.lower():
+            continue
+        score = cosine_similarity(query_vec, item.embedding_blob)
+        scored.append((score, item))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [item for _, item in scored[:top_k]]
+
+
+def build_embedding_continuity_context(theme, language, top_k=10):
+    neighbors = find_similar_vocab(theme, language, top_k=top_k, exclude_word=theme)
+    if not neighbors:
+        return ""
+    words = ", ".join(v.word for v in neighbors)
+    return f"\nRelated vocabulary the learner already knows: {words}. Connect new words to these."

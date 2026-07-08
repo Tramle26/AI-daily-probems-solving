@@ -8,6 +8,10 @@ from google.genai import types
 from ollama import Client as OllamaClient
 from pydantic import BaseModel, Field
 
+from models import DocumentChunk
+from services.documents import keyword_search_chunks
+from services.retrieval import search_chunks_text
+
 GOOGLE_MODEL = "gemma-4-26b-a4b-it"
 LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "gemma3:4b")
 
@@ -343,6 +347,28 @@ def ask_document(client, document_text, question, native_language):
     )
     return response.text
 
+
+def ask_document_smart(client, doc, question, native_language):
+    """RAG over indexed chunks when available; fall back to keyword/truncation otherwise."""
+    chunk_count = DocumentChunk.query.filter_by(document_id=doc.id).count()
+
+    if chunk_count > 0:
+        chunks = search_chunks_text(doc.id, question, top_k=5)
+        prompt = build_rag_prompt(question, chunks, native_language)
+        sources = chunks
+    else:
+        snippets = keyword_search_chunks(doc.raw_text, question)
+        context = "\n\n".join(snippets) if snippets else doc.raw_text[:8000]
+        prompt = build_ask_prompt(context, question, native_language)
+        sources = []
+
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(temperature=0.3),
+    )
+    return response.text, sources
+
 class AskVocabSuggestion(BaseModel):
     words: list[VocabularyEntry]
 
@@ -363,3 +389,31 @@ Answer:
         ),
     )
     return parse_model_json(response.text, AskVocabSuggestion)
+
+
+def build_rag_prompt(question, chunk_texts, native_language):
+    context = "\n\n---\n\n".join(chunk_texts)
+    return f"""
+Answer this question using ONLY the excerpts below from the user's document.
+Explain in {native_language} when helpful.
+If the answer is not supported by the excerpts, say so.
+
+Excerpts:
+{context}
+
+Question: {question}
+"""
+
+
+def build_semantic_vocab_prompt(question, chunk_texts, language, native_language, max_words=15):
+    context = "\n\n---\n\n".join(chunk_texts)
+    return f"""
+The user asked: {question}
+
+Based ONLY on these excerpts from their {language} study material:
+{context}
+
+List the {max_words} most important {language} vocabulary items for this question.
+Explain meanings in {native_language}.
+Return JSON with items: word, meaning, example, topic, difficulty.
+"""

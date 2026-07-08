@@ -6,6 +6,14 @@
     <div>
       <h1>{{ doc.filename }}</h1>
       <p class="muted">{{ doc.language or "Unknown language" }} · {{ doc.word_count }} words</p>
+      <p class="muted" id="indexStatus">
+        {% if chunk_count > 0 %}
+          ✅ Indexed {{ chunk_count }} chunks
+        {% else %}
+          ⚠️ Not indexed yet
+        {% endif %}
+        <button type="button" id="reindexBtn" class="secondary" style="margin-left: 8px;">Re-index document</button>
+      </p>
     </div>
     <form method="post" action="{{ url_for('main.upload_remove', doc_id=doc.id) }}">
       <button type="submit" class="secondary">Remove file</button>
@@ -33,6 +41,34 @@
 </section>
 
 <script>
+  const reindexBtn = document.querySelector("#reindexBtn")
+  const indexStatusEl = document.querySelector("#indexStatus")
+
+  reindexBtn.addEventListener("click", async () => {
+    reindexBtn.disabled = true
+    const prevText = indexStatusEl.firstChild.textContent
+    indexStatusEl.firstChild.textContent = "Re-indexing... "
+
+    try {
+      const res = await fetch("/api/documents/{{ doc.id }}/index", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reindex: true }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        indexStatusEl.firstChild.textContent = data.error || "Re-index failed. "
+        return
+      }
+      indexStatusEl.firstChild.textContent = `✅ Indexed ${data.chunks_indexed} chunks `
+    } catch (err) {
+      indexStatusEl.firstChild.textContent = "Re-index failed. Please try again. "
+    } finally {
+      reindexBtn.disabled = false
+    }
+  })
+
   const generateBtn = document.querySelector("#generateBtn")
   const statusEl = document.querySelector("#status")
   const cardsEl = document.querySelector("#cards")
