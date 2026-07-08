@@ -1,47 +1,70 @@
 # Phase 2b: PyTorch Embeddings (Semantic Search + Related Words)
 
-Upgrades [Phase 2a](phase-2a-personalization.md) with **sentence-transformers** (PyTorch) for true semantic document search and vocabulary similarity. **Prerequisite:** Phase 0 schema (`DocumentChunk`, `embedding_blob` columns) and Phase 1 upload flow.
+Upgrades the **completed Phase 2a** baseline with **sentence-transformers** (PyTorch) for true semantic document search and vocabulary similarity.
+
+## Current baseline (already shipped)
+
+Phase 2a is done. Do **not** re-implement these — build on them:
+
+| Feature | Current implementation | Phase 2b upgrade |
+|---------|------------------------|------------------|
+| Ask Gemma | `POST /api/ask` — keyword snippets via `keyword_search_chunks`, else first 8000 chars | RAG over embedded `DocumentChunk` rows |
+| Topic continuity | `build_continuity_context()` — `topic ILIKE` in `services/vocabulary.py` | `build_embedding_continuity_context()` with fallback |
+| Dictionary similar words | Gemma guess + 10 recent saved words | Merge embedding neighbors from user's history |
+| Document vocab extract | `extract_document_vocabulary()` — first 8000 chars | Optional: semantic chunk selection first |
+| Mastery statuses | `new`, `learning`, `practice`, `mastered` (`weak` migrated → `practice`) | No change |
+| Vocabulary browser | `/library` with search by word/topic + status filters | Similar-words panel per item |
+| UI theming | `services/background.py` — topic categories + live canvas | Optional: richer topic labels from embeddings |
+| Schema hooks | `DocumentChunk.embedding_blob`, `VocabularyItem.embedding_blob` (nullable) | Populate on upload / save |
+
+**Not started:** `sentence-transformers`, `services/embeddings.py`, `services/retrieval.py`, chunk indexing on upload.
 
 ## Goals
 
-| In scope (Phase 2b) | Out of scope |
-|---------------------|--------------|
-| Chunk + embed uploaded documents | Custom PyTorch model training |
-| Semantic study search (RAG) | Placement test |
-| Ask Gemma using retrieved chunks (not truncation) | Conversation (Phase 3) |
-| Embed vocabulary on save | Forget-predictor ML |
-| Similar words from user's history | |
-| Embedding-based topic continuity | |
+| In scope (Phase 2b) | Out of scope (Phase 3) |
+|---------------------|------------------------|
+| Chunk + embed uploaded documents | Placement test |
+| Semantic study search (RAG) | Conversation practice |
+| Upgrade Ask Gemma to retrieved chunks | Gemma-generated roadmap |
+| Embed vocabulary on save | SM-2 review |
+| Similar words from user's history | Weekly AI report |
+| Embedding-based flashcard continuity | |
+| Index status on upload preview | |
 
 ## Why PyTorch here
 
-| Feature | Without PyTorch (Phase 2a) | With PyTorch (Phase 2b) |
-|---------|---------------------------|-------------------------|
-| "Important words in chapter 2?" | First 8000 chars only | Finds semantically similar chunks anywhere in doc |
+| Feature | Today (Phase 2a) | After Phase 2b |
+|---------|------------------|----------------|
+| "Important words in chapter 2?" | Keyword hit or first 8000 chars | Finds semantically similar chunks anywhere in doc |
 | Similar words | Gemma guess or topic tags | Cosine neighbors from saved vocab vectors |
 | sports → soccer continuity | `topic ILIKE '%sport%'` | Embedding neighbors across related topics |
+| Long PDF page 15 content | Often missed | Retrieved by semantic similarity |
 
 ## Exit criteria
 
-- [ ] Upload document → chunks indexed with embeddings
-- [ ] Semantic search returns answer grounded in relevant passages
-- [ ] Dictionary shows similar words from user's saved vocabulary
-- [ ] New flashcard generation uses embedding neighbors for continuity
-- [ ] First model load documented; indexing shows progress in UI
+- [ ] Upload document → `document_chunk` rows with non-null `embedding_blob`
+- [ ] Ask Gemma answers from retrieved chunks when indexed (fallback to current keyword/truncation path when not)
+- [ ] `/api/semantic-search` returns grounded answers + source snippets
+- [ ] Dictionary shows similar words from user's saved vocabulary (embedding neighbors)
+- [ ] Flashcard `/stream` prefers embedding continuity, falls back to tag continuity
+- [ ] Upload preview shows "Indexed N chunks" or re-index button
+- [ ] First model load documented; slow path shows user feedback
 
 ---
 
 ## Prerequisites
 
-- Phase 1 + 2a complete
-- `DocumentChunk` table exists (Phase 0)
-- `VocabularyItem.embedding_blob` column exists (nullable OK)
-- ~500MB disk for `sentence-transformers` + model weights
-- CPU sufficient (`all-MiniLM-L6-v2`); GPU optional
+- Phase 1 + 2a verified (review, Excel, Ask, library, dashboard charts)
+- `DocumentChunk` and `VocabularyItem.embedding_blob` exist (Phase 0)
+- `GEMINI_API_KEY` set for RAG answer synthesis
+- ~500MB disk for `sentence-transformers` + `all-MiniLM-L6-v2` weights
+- CPU sufficient; GPU optional
 
 ---
 
 ## Step 2b.1 — Add dependencies
+
+Add to `pyproject.toml`:
 
 ```toml
 "sentence-transformers>=3.0.0",
@@ -52,7 +75,7 @@ Upgrades [Phase 2a](phase-2a-personalization.md) with **sentence-transformers** 
 uv sync
 ```
 
-First run downloads `all-MiniLM-L6-v2` (~90MB model + PyTorch deps).
+First embed call downloads `all-MiniLM-L6-v2` (~90MB). Keep lazy loading — do **not** load at Flask startup.
 
 ---
 
@@ -97,8 +120,6 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return float(np.dot(va, vb))
 ```
 
-Lazy-load pattern: model loads on first embed call, not at app startup (keeps Flask fast).
-
 ---
 
 ## Step 2b.3 — Retrieval service
@@ -123,8 +144,7 @@ def chunk_document(text: str, chunk_size: int = 500, overlap: int = 50) -> list[
     return chunks
 
 
-def index_document(document_id: int, text: str, reindex: bool = False):
-    """Chunk, embed, and persist DocumentChunk rows."""
+def index_document(document_id: int, text: str, reindex: bool = False) -> int:
     if reindex:
         DocumentChunk.query.filter_by(document_id=document_id).delete()
         db.session.commit()
@@ -208,7 +228,6 @@ def find_similar_vocab(word, language, top_k=5, exclude_word=None):
 
 
 def build_embedding_continuity_context(theme, language, top_k=10):
-    """Find prior vocab semantically related to the new theme."""
     neighbors = find_similar_vocab(theme, language, top_k=top_k, exclude_word=theme)
     if not neighbors:
         return ""
@@ -216,12 +235,11 @@ def build_embedding_continuity_context(theme, language, top_k=10):
     return f"\nRelated vocabulary the learner already knows: {words}. Connect new words to these."
 ```
 
-Update `upsert_vocabulary` / `save_deck` to call `embed_vocabulary_item(vocab)` after save (wrap in try/except — don't fail deck save if embed slow).
+Hook into `save_deck()` / `upsert_vocabulary()` — call `embed_vocabulary_item(vocab)` after save inside try/except so a slow embed never blocks deck save.
 
-Batch backfill script for existing vocab:
+**Backfill existing vocab** (one-time Flask shell):
 
 ```python
-# One-time in flask shell
 from models import VocabularyItem
 from services.vocabulary import embed_vocabulary_item_if_missing
 for item in VocabularyItem.query.all():
@@ -268,14 +286,11 @@ Return JSON with items: word, meaning, example, topic, difficulty.
 
 ## Step 2b.6 — API routes
 
-```python
-# routes/api.py
-from services.retrieval import index_document, search_chunks, search_chunks_text
-from services.gemma import build_rag_prompt, build_semantic_vocab_prompt
+Add to `routes/api.py`:
 
+```python
 @bp.post("/documents/<int:doc_id>/index")
 def document_index(doc_id):
-    from models import UploadedDocument
     doc = UploadedDocument.query.get_or_404(doc_id)
     reindex = request.json.get("reindex", False) if request.is_json else False
     count = index_document(doc.id, doc.raw_text, reindex=reindex)
@@ -284,45 +299,12 @@ def document_index(doc_id):
 
 @bp.post("/semantic-search")
 def semantic_search():
-    data = request.get_json()
-    doc_id = data["document_id"]
-    question = data["question"].strip()
-    profile = get_profile()
-
-    hits = search_chunks(doc_id, question, top_k=5)
-    if not hits:
-        return jsonify({"error": "Document not indexed. Call /api/documents/<id>/index first."}), 400
-
-    chunk_texts = [h["text"] for h in hits]
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-
-    if data.get("mode") == "vocabulary":
-        prompt = build_semantic_vocab_prompt(
-            question, chunk_texts, data.get("language", profile.target_language),
-            profile.native_language, data.get("max_words", 15),
-        )
-        response = client.models.generate_content(
-            model=GOOGLE_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=VocabularyList,
-            ),
-        )
-        result = VocabularyList.model_validate_json(response.text)
-        return jsonify({
-            "items": [i.model_dump() for i in result.items],
-            "chunks_used": hits,
-        })
-
-    prompt = build_rag_prompt(question, chunk_texts, profile.native_language)
-    response = client.models.generate_content(model=GOOGLE_MODEL, contents=prompt)
-    return jsonify({"answer": response.text, "chunks_used": hits})
+    # RAG answer or vocabulary extraction mode — see original step 2b.6
+    ...
 
 
 @bp.get("/vocabulary/<int:vocab_id>/similar")
 def vocabulary_similar(vocab_id):
-    from models import VocabularyItem
     item = VocabularyItem.query.get_or_404(vocab_id)
     similar = find_similar_vocab(item.word, item.language, top_k=8, exclude_word=item.word)
     return jsonify({
@@ -335,101 +317,109 @@ def vocabulary_similar(vocab_id):
 
 ## Step 2b.7 — Wire indexing on upload
 
-Update document save flow (Phase 1 upload):
+Update `save_document()` flow in `routes/main.py` upload POST:
 
 ```python
-# After save_document() in upload POST handler:
-from services.retrieval import index_document
-
 doc = save_document(filename, text, language)
 try:
+    from services.retrieval import index_document
     index_document(doc.id, doc.raw_text)
 except Exception as exc:
-    # Log but don't fail upload — user can re-index manually
-    app.logger.warning("Embedding index failed: %s", exc)
+    current_app.logger.warning("Embedding index failed: %s", exc)
 ```
 
-Show indexing status on upload preview: "Indexed N chunks" or "Index pending".
+Update `templates/upload_preview.html`:
+- Show chunk count from `DocumentChunk.query.filter_by(document_id=doc.id).count()`
+- Button: "Re-index document" → `POST /api/documents/<id>/index`
+
+Also delete chunks when document is removed — extend `delete_document()` in `services/documents.py`.
 
 ---
 
-## Step 2b.8 — Upgrade Ask Gemma to RAG
+## Step 2b.8 — Upgrade Ask Gemma (replace current hybrid)
 
-Replace Phase 2a truncated ask with RAG when chunks exist:
+**Current code** (`routes/api.py` → `api_ask`):
+
+```python
+snippets = keyword_search_chunks(doc.raw_text, data["question"])
+context = "\n\n".join(snippets) if snippets else doc.raw_text[:8000]
+answer = ask_document(client, context, data["question"], profile.native_language)
+```
+
+**Replace with** `ask_document_smart()`:
 
 ```python
 def ask_document_smart(client, doc, question, native_language):
-    from models import DocumentChunk
     chunk_count = DocumentChunk.query.filter_by(document_id=doc.id).count()
 
     if chunk_count > 0:
-        from services.retrieval import search_chunks_text
-        from services.gemma import build_rag_prompt
         chunks = search_chunks_text(doc.id, question, top_k=5)
         prompt = build_rag_prompt(question, chunks, native_language)
     else:
-        prompt = build_ask_prompt(doc.raw_text, question, native_language)
+        snippets = keyword_search_chunks(doc.raw_text, question)
+        context = "\n\n".join(snippets) if snippets else doc.raw_text[:8000]
+        prompt = build_ask_prompt(context, question, native_language)
 
-    response = client.models.generate_content(model=GOOGLE_MODEL, contents=prompt)
+    response = client.models.generate_content(model=GOOGLE_MODEL, contents=prompt, ...)
     return response.text
 ```
+
+Keep keyword fallback when document is not indexed — do not break existing Ask flow.
+
+Optional Ask UI upgrade (`templates/ask.html`): expandable "Sources used" section when RAG chunks are returned.
 
 ---
 
 ## Step 2b.9 — Upgrade dictionary similar words
 
-In `/api/dictionary/search`, merge embedding neighbors with Gemma results:
+In `POST /api/dictionary/search`, replace the current "10 most recent words" related list:
 
 ```python
-embedding_neighbors = find_similar_vocab(word, language, top_k=5)
-gemma_result = dictionary_lookup(client, word, language, profile.native_language, related_words)
+# Today:
+related = [v.word for v in VocabularyItem.query.filter_by(language=target_language).limit(10).all()]
 
-# Merge similar_words: embedding first, then Gemma, dedupe
+# Phase 2b:
+embedding_neighbors = find_similar_vocab(word, target_language, top_k=5)
+related = [v.word for v in embedding_neighbors]
+# Fall back to recent words if no embeddings yet
+```
+
+After Gemma lookup, merge `similar_words`:
+
+```python
 emb_words = [v.word for v in embedding_neighbors]
-combined = list(dict.fromkeys(emb_words + gemma_result.similar_words))
-gemma_result.similar_words = combined[:8]
+combined = list(dict.fromkeys(emb_words + result.similar_words))
+result.similar_words = combined[:8]
 ```
 
 ---
 
 ## Step 2b.10 — Upgrade flashcard continuity
 
-In `/stream`, prefer embedding continuity over tag-only:
+In `routes/flashcards.py` → `stream()`:
 
 ```python
 from services.vocabulary import build_embedding_continuity_context, build_continuity_context
 
 continuity = build_embedding_continuity_context(theme, language)
 if not continuity:
-    continuity = build_continuity_context(theme, language)  # Phase 2a fallback
+    continuity = build_continuity_context(theme, language)
 ```
+
+Also embed each vocab item after stream save (same try/except pattern as `save_deck`).
 
 ---
 
-## Step 2b.11 — UI: Semantic search page
+## Step 2b.11 — UI: Semantic search on Ask page
 
-Add `templates/semantic_search.html` or section on Ask page:
+Extend `templates/ask.html` rather than a separate page (keeps nav simple):
 
-- Document dropdown
-- Question input: "What are the important words in chapter 2?"
-- Mode toggle: **Answer** | **Extract vocabulary**
-- Results: answer text + expandable "Sources used" (chunk snippets with scores)
-- Button: "Save as flashcard deck"
+- Mode toggle: **Ask** | **Extract vocabulary**
+- "Extract vocabulary" calls `POST /api/semantic-search` with `mode: "vocabulary"`
+- Show answer + expandable source chunks with similarity scores
+- Button: "Save as flashcard deck" (reuse existing `POST /api/decks`)
 
-Example fetch:
-
-```javascript
-const res = await fetch("/api/semantic-search", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    document_id: docId,
-    question: question,
-    mode: "vocabulary",
-    max_words: 12,
-  }),
-})
-```
+**Library enhancement (optional):** On `/library`, add "Similar words" fetch per row via `/api/vocabulary/<id>/similar`.
 
 ---
 
@@ -440,7 +430,8 @@ const res = await fetch("/api/semantic-search", {
 | First embed slow (~5–15s) | Show "Loading language model…" once; lazy `get_model()` |
 | Large PDF many chunks | Batch `embed_texts(chunks)` not one-by-one |
 | Re-upload same doc | `reindex=True` deletes old chunks first |
-| Memory | MiniLM is small; avoid loading multiple models |
+| Memory | MiniLM only; single global singleton |
+| Deck save blocked | Never fail save on embed error — log and backfill later |
 
 ---
 
@@ -449,11 +440,13 @@ const res = await fetch("/api/semantic-search", {
 | Test | Expected |
 |------|----------|
 | Upload 20-page PDF | `document_chunk` rows with non-null `embedding_blob` |
-| Ask about content on page 15 | RAG retrieves relevant chunk (not truncated away) |
-| Semantic vocab mode | Returns word list from relevant sections |
-| `/api/vocabulary/<id>/similar` | Returns semantically related saved words |
+| Ask about content deep in doc | RAG retrieves relevant chunk (not truncated away) |
+| Ask on unindexed doc | Falls back to keyword / 8000-char path (no error) |
+| Semantic vocab mode | Word list from relevant sections |
+| `/api/vocabulary/<id>/similar` | Semantically related saved words |
 | Dictionary search | `similar_words` includes embedding neighbors |
 | Soccer deck after sports vocab | Prompt includes embedding-related old words |
+| Upload preview | Shows chunk count |
 
 ---
 
@@ -461,28 +454,29 @@ const res = await fetch("/api/semantic-search", {
 
 **"Document not indexed":** Call `POST /api/documents/<id>/index` or re-upload.
 
-**Empty search results:** Chunks may lack embeddings — check `embedding_blob IS NOT NULL`.
+**Empty search results:** Check `embedding_blob IS NOT NULL` on chunks.
 
-**Import error for sentence_transformers:** Run `uv sync`; ensure Python 3.10+ compatible wheels.
+**Import error for sentence_transformers:** Run `uv sync`; Python 3.14 wheels may lag — pin to 3.12/3.13 if needed.
 
-**Slow on every request:** Ensure `get_model()` uses global singleton, not reinstantiating.
+**Slow on every request:** Ensure `get_model()` uses global singleton.
 
 ---
 
 ## What comes next
 
-→ [Phase 3: Advanced](phase-3-advanced.md) — placement test, roadmap, conversation, charts, SM-2 review
+→ [Phase 3: Advanced](phase-3-advanced.md) — placement, full roadmap, conversation, weekly report, SM-2
 
 ---
 
 ## File checklist
 
-- [ ] `sentence-transformers`, `numpy` in pyproject.toml
+- [ ] `sentence-transformers`, `numpy` in `pyproject.toml`
 - [ ] `services/embeddings.py`
 - [ ] `services/retrieval.py`
-- [ ] Vocabulary embed helpers + save_deck hook
+- [ ] Vocabulary embed helpers + `save_deck` / stream hooks
 - [ ] RAG prompts in `services/gemma.py`
 - [ ] API: `/api/documents/<id>/index`, `/api/semantic-search`, `/api/vocabulary/<id>/similar`
-- [ ] Upload auto-index + Ask Gemma RAG upgrade
+- [ ] Upload auto-index + chunk cleanup on delete
+- [ ] Ask Gemma RAG upgrade (keep keyword fallback)
 - [ ] Dictionary + flashcard continuity upgrades
-- [ ] Semantic search UI
+- [ ] Ask page semantic search UI + upload preview index status

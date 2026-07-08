@@ -60,14 +60,14 @@ body {
   background: rgba(255, 255, 255, 0.88);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(10px);
-  overflow: hidden;
+  overflow: visible;
   isolation: isolate;
 }
 
 .site-header::before {
   content: "";
   position: absolute;
-  inset: -40% -10%;
+  inset: 0;
   z-index: -1;
   background:
     radial-gradient(ellipse 45% 80% at 15% 50%, color-mix(in srgb, var(--live-blob1) 28%, transparent), transparent 70%),
