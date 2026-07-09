@@ -21,7 +21,7 @@ from services.quiz import (
     grade_and_update_mastery,
 )
 from services.review import mark_review_feedback
-from services.vocabulary import save_deck, upsert_vocabulary
+from services.vocabulary import is_valid_vocab_word, save_deck, upsert_vocabulary
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -80,6 +80,7 @@ def generate_from_document(doc_id):
             "difficulty": item.difficulty,
         }
         for item in result.items
+        if is_valid_vocab_word(item.word)
     ]
 
     if data.get("save", False):

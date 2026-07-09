@@ -1,5 +1,20 @@
+import re
+
 from extensions import db
 from models import Flashcard, FlashcardDeck, VocabularyItem
+
+_HAS_LETTER_RE = re.compile(r"[A-Za-z\u00C0-\u024F]", re.UNICODE)
+
+
+def is_valid_vocab_word(word):
+    """Reject punctuation-only or symbol garbage from model/PDF extraction."""
+    text = (word or "").strip()
+    if len(text) < 2:
+        return False
+    if not _HAS_LETTER_RE.search(text):
+        return False
+    letters = sum(1 for ch in text if ch.isalpha())
+    return letters >= max(1, len(text) * 0.4)
 
 
 def get_words_by_status(language, status):

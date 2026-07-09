@@ -2,6 +2,7 @@ from pypdf import PdfReader
 
 from extensions import db
 from models import UploadedDocument
+from services.vocabulary import is_valid_vocab_word
 
 
 def extract_text_from_file(file_storage):
@@ -89,7 +90,7 @@ def rows_to_cards(rows, column_map):
     cards = []
     for row in rows:
         word = str(row.get(column_map.get("word", ""), "")).strip()
-        if not word:
+        if not word or not is_valid_vocab_word(word):
             continue
         cards.append({
             "front": word,

@@ -8,7 +8,12 @@ from pydantic import ValidationError
 from extensions import db
 from services.gemma import FlashcardSchema, card_stream, clean_count, sse
 from services.profile import get_profile
-from services.vocabulary import build_continuity_context, get_words_by_status, upsert_vocabulary
+from services.vocabulary import (
+    build_continuity_context,
+    get_words_by_status,
+    is_valid_vocab_word,
+    upsert_vocabulary,
+)
 
 bp = Blueprint("flashcards", __name__)
 
@@ -45,6 +50,8 @@ def stream():
                 try:
                     card = FlashcardSchema.model_validate(card_data)
                 except ValidationError:
+                    continue
+                if not is_valid_vocab_word(card.front):
                     continue
 
                 vocab = upsert_vocabulary(

@@ -90,6 +90,7 @@ Each flashcard has:
 - memory_tip: a short mnemonic (optional)
 
 Rules:
+- front must be a real word or short phrase in {language}, never punctuation or symbols alone.
 - Do not repeat cards.
 - Order the deck from easier to harder.
 """
@@ -280,6 +281,7 @@ Passage:
 
 Return JSON with items: word, meaning, example, topic, difficulty.
 Focus on words a learner needs to understand this text.
+Each word must be a real vocabulary item, not punctuation, URLs, or garbled symbols.
 """
 
 def extract_document_vocabulary(client, text, language, max_words, native_language="English"):
