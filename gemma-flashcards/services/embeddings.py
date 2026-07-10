@@ -5,11 +5,24 @@ _model = None
 MODEL_NAME = "all-MiniLM-L6-v2"
 
 
+def is_model_loaded() -> bool:
+    return _model is not None
+
+
 def get_model():
     global _model
     if _model is None:
         _model = SentenceTransformer(MODEL_NAME)
     return _model
+
+
+def warmup_model() -> bool:
+    """Load the embedding model if needed. Safe to call from a background thread."""
+    try:
+        get_model()
+        return True
+    except Exception:
+        return False
 
 
 def embed_text(text: str) -> list[float]:

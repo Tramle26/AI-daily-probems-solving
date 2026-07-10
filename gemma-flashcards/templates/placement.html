@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Placement test | Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Placement test</h1>
+  <p class="muted">About 10 mixed questions. Answers stay on the server — we'll estimate your level and build a roadmap.</p>
+
+  <div id="setup">
+    <button type="button" id="startBtn" class="primary">Start test</button>
+    <p id="status" class="muted" style="margin-top: 12px;"></p>
+  </div>
+
+  <div id="quiz" hidden>
+    <p class="muted" id="progress"></p>
+    <div id="questionCard" class="list-card" style="margin-top: 12px;"></div>
+    <div id="options" class="form-grid" style="margin-top: 12px;"></div>
+    <label id="fillLabel" hidden style="display:block; margin-top: 12px;">Your answer
+      <input type="text" id="fillInput" autocomplete="off" />
+    </label>
+    <button type="button" id="nextBtn" class="primary" style="margin-top: 16px;" hidden>Next</button>
+  </div>
+
+  <div id="results" class="list-card" hidden style="margin-top: 24px;">
+    <h2>Your level: <span id="levelOut"></span></h2>
+    <p id="summaryOut"></p>
+    <p><strong>Strengths:</strong> <span id="strengthsOut" class="muted"></span></p>
+    <p><strong>Focus areas:</strong> <span id="weakOut" class="muted"></span></p>
+    <a id="roadmapLink" href="{{ url_for('main.roadmap_view') }}" class="primary" style="display:inline-block;margin-top:12px;text-decoration:none;">View your roadmap</a>
+  </div>
+</section>
+
+<script>
+  let questions = []
+  let answers = []
+  let index = 0
+
+  const statusEl = document.getElementById("status")
+  const quizEl = document.getElementById("quiz")
+  const resultsEl = document.getElementById("results")
+  const questionCard = document.getElementById("questionCard")
+  const optionsEl = document.getElementById("options")
+  const fillLabel = document.getElementById("fillLabel")
+  const fillInput = document.getElementById("fillInput")
+  const nextBtn = document.getElementById("nextBtn")
+  const progressEl = document.getElementById("progress")
+
+  document.getElementById("startBtn").addEventListener("click", async () => {
+    statusEl.textContent = "Generating questions…"
+    try {
+      const res = await fetch("{{ url_for('main.placement_start') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        statusEl.textContent = data.error || "Failed to start."
+        return
+      }
+      questions = data.questions || []
+      answers = new Array(questions.length).fill("")
+      index = 0
+      document.getElementById("setup").hidden = true
+      quizEl.hidden = false
+      showQuestion()
+    } catch (err) {
+      statusEl.textContent = "Network error starting test."
+    }
+  })
+
+  function showQuestion() {
+    const q = questions[index]
+    progressEl.textContent = `Question ${index + 1} of ${questions.length}`
+    questionCard.innerHTML = `<p class="muted">${q.skill || q.question_type || ""}</p><p><strong>${q.question}</strong></p>`
+    optionsEl.innerHTML = ""
+    fillLabel.hidden = true
+    nextBtn.hidden = true
+    fillInput.value = ""
+
+    if (q.question_type === "fill_blank" || !(q.options && q.options.length)) {
+      fillLabel.hidden = false
+      nextBtn.hidden = false
+      nextBtn.textContent = index === questions.length - 1 ? "Submit" : "Next"
+      return
+    }
+
+    q.options.forEach((option) => {
+      const btn = document.createElement("button")
+      btn.type = "button"
+      btn.className = "secondary"
+      btn.textContent = option
+      btn.addEventListener("click", () => {
+        answers[index] = option
+        advance()
+      })
+      optionsEl.appendChild(btn)
+    })
+  }
+
+  nextBtn.addEventListener("click", () => {
+    answers[index] = fillInput.value.trim()
+    advance()
+  })
+
+  async function advance() {
+    index += 1
+    if (index < questions.length) {
+      showQuestion()
+      return
+    }
+    quizEl.hidden = true
+    statusEl.textContent = "Evaluating…"
+    document.getElementById("setup").hidden = false
+    try {
+      const res = await fetch("{{ url_for('main.placement_submit') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        statusEl.textContent = data.error || "Evaluation failed."
+        return
+      }
+      document.getElementById("setup").hidden = true
+      resultsEl.hidden = false
+      document.getElementById("levelOut").textContent = data.estimated_level
+      document.getElementById("summaryOut").textContent = data.summary || ""
+      document.getElementById("strengthsOut").textContent = (data.strengths || []).join(", ") || "—"
+      document.getElementById("weakOut").textContent = (data.weak_areas || []).join(", ") || "—"
+      if (data.redirect) {
+        document.getElementById("roadmapLink").href = data.redirect
+      }
+    } catch (_) {
+      statusEl.textContent = "Network error submitting test."
+    }
+  }
+</script>
+{% endblock %}

@@ -1,9 +1,11 @@
+import os
 from datetime import date, datetime, timedelta
 
+from google import genai
 from sqlalchemy import func
 
 from extensions import db
-from models import QuizSession, VocabularyItem
+from models import ProgressSnapshot, QuizSession, VocabularyItem
 from services.roadmap import get_roadmap_progress
 
 RANGE_DAYS = {"week": 7, "month": 30, "year": 365}
@@ -153,12 +155,48 @@ def get_streak_roadmap(range_key: str = "week"):
     }
 
 
+def get_mastery_breakdown():
+    return {
+        "new": VocabularyItem.query.filter_by(mastery_status="new").count(),
+        "learning": VocabularyItem.query.filter_by(mastery_status="learning").count(),
+        "practice": VocabularyItem.query.filter_by(mastery_status="practice").count(),
+        "mastered": VocabularyItem.query.filter_by(mastery_status="mastered").count(),
+    }
+
+
 def get_progress_charts(range_key: str = "week"):
     return {
         "range": range_key if range_key in RANGE_DAYS else "week",
         "words_series": get_words_learned_series(range_key),
         "streak_roadmap": get_streak_roadmap(range_key),
+        "mastery_breakdown": get_mastery_breakdown(),
     }
+
+
+def upsert_daily_snapshot():
+    today = date.today()
+    snap = ProgressSnapshot.query.filter_by(date=today).first()
+    if not snap:
+        snap = ProgressSnapshot(date=today)
+        db.session.add(snap)
+
+    snap.words_learned = VocabularyItem.query.count()
+    snap.words_mastered = VocabularyItem.query.filter_by(mastery_status="mastered").count()
+
+    start = datetime.combine(today, datetime.min.time())
+    end = datetime.combine(today, datetime.max.time())
+    sessions = QuizSession.query.filter(
+        QuizSession.finished_at.isnot(None),
+        QuizSession.finished_at >= start,
+        QuizSession.finished_at <= end,
+    ).all()
+    if sessions and sum(s.total for s in sessions):
+        snap.quiz_accuracy = sum(s.score for s in sessions) / sum(s.total for s in sessions) * 100
+    else:
+        snap.quiz_accuracy = snap.quiz_accuracy or 0.0
+
+    db.session.commit()
+    return snap
 
 
 def get_dashboard_summary(profile):
@@ -189,3 +227,47 @@ def get_dashboard_summary(profile):
         "study_words": study_words,
         "roadmap_progress": get_roadmap_progress(profile),
     }
+
+
+def generate_weekly_report():
+    from services.background import get_active_topics
+    from services.gemma import generate_weekly_report_text
+    from services.profile import get_profile
+
+    profile = get_profile()
+    summary = get_dashboard_summary(profile)
+    charts = get_progress_charts("week")
+    roadmap = summary["roadmap_progress"]
+
+    stats = {
+        "total_words": summary["total"],
+        "mastered": summary["mastered"],
+        "practice": summary["practice"],
+        "accuracy": summary["accuracy"],
+        "words_this_week": charts["words_series"]["total"],
+        "active_days": charts["streak_roadmap"]["active_days"],
+        "roadmap_level": roadmap.get("current_level_title") or "n/a",
+        "study_words": [w.word for w in summary["study_words"]],
+        "topics": [t["label"] for t in get_active_topics(limit=5)],
+    }
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {
+            "narrative": (
+                f"You have {stats['total_words']} words saved and "
+                f"{stats['mastered']} mastered. Keep reviewing practice words "
+                f"and study your current level: {stats['roadmap_level']}."
+            ),
+            "strong_areas": [],
+            "weak_areas": [],
+            "suggested_topics": stats["topics"][:3],
+            "review_focus": stats["study_words"][:5],
+            "cached": False,
+        }
+
+    client = genai.Client(api_key=api_key)
+    report = generate_weekly_report_text(client, profile, stats)
+    payload = report.model_dump()
+    payload["cached"] = False
+    return payload

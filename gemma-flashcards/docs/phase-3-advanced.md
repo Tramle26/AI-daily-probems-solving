@@ -503,4 +503,4 @@ Given what's already built, implement in this order:
 - [ ] SM-2 upgrade in `services/review.py`
 - [ ] `upsert_daily_snapshot()` wired after quiz/review/deck
 - [ ] Mastery doughnut on dashboard
-- [ ] Nav links for Roadmap and Conversation
+- [x] Nav links for Roadmap and Conversation

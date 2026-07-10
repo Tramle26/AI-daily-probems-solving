@@ -65,6 +65,9 @@ class VocabularyItem(db.Model):
     mastery_status = db.Column(db.String(16), default="new")
     first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_reviewed_at = db.Column(db.DateTime)
+    next_review_at = db.Column(db.DateTime)
+    ease_factor = db.Column(db.Float, default=2.5)
+    interval_days = db.Column(db.Integer, default=1)
     review_count = db.Column(db.Integer, default=0)
     quiz_accuracy = db.Column(db.Float, default=0.0)
     user_notes = db.Column(db.Text)
@@ -161,4 +164,50 @@ class AskHistory(db.Model):
 
     document = db.relationship("UploadedDocument", backref="questions")
 
+class Roadmap(db.Model):
+    __tablename__ = "roadmap"
 
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(128), default="My learning path")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    levels = db.relationship(
+        "RoadmapLevel", backref="roadmap", lazy=True, cascade="all, delete-orphan"
+    )
+
+class RoadmapLevel(db.Model):
+    __tablename__ = "roadmap_level"
+
+    id = db.Column(db.Integer, primary_key=True)
+    roadmap_id = db.Column(db.Integer, db.ForeignKey("roadmap.id"), nullable=False)
+    level_index = db.Column(db.Integer, nullable=False)
+    title = db.Column(db.String(128))
+    description = db.Column(db.Text)
+    topics = db.Column(db.JSON, default=list)   # ["food", "travel", ...]
+    target_word_count = db.Column(db.Integer, default=50)
+    status = db.Column(db.String(16), default="locked")  # locked, active, completed
+    completed_at = db.Column(db.DateTime)
+
+class PlacementSession(db.Model):
+    __tablename__ = "placement_session"
+
+    id = db.Column(db.Integer, primary_key=True)
+    estimated_level = db.Column(db.String(8))   # A1–C1 or beginner/advanced
+    weak_areas = db.Column(db.JSON, default=list)
+    strengths = db.Column(db.JSON, default=list)
+    raw_evaluation = db.Column(db.JSON)
+    finished_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class ConversationSession(db.Model):
+    __tablename__ = "conversation_session"
+
+    id = db.Column(db.Integer, primary_key=True)
+    topic = db.Column(db.String(128))
+    difficulty = db.Column(db.String(16))
+    target_words = db.Column(db.JSON, default=list)
+    messages = db.Column(db.JSON, default=list)
+    words_used_correctly = db.Column(db.JSON, default=list)
+    words_missed = db.Column(db.JSON, default=list)
+    corrections = db.Column(db.JSON, default=list)
+    summary = db.Column(db.Text)
+    started_at = db.Column(db.DateTime, default=datetime.utcnow)
+    finished_at = db.Column(db.DateTime)

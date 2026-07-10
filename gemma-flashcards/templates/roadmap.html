@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Roadmap | Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>{{ progress.title or "Learning path" }}</h1>
+  <p class="roadmap-position">
+    Level {{ progress.current_level_index }} of {{ progress.levels|length }}
+    · <strong>{{ progress.current_level_title }}</strong>
+  </p>
+  {% if progress.message %}
+  <p class="muted roadmap-note">{{ progress.message }}</p>
+  {% endif %}
+  {% if not progress.has_roadmap %}
+  <p class="muted">No saved roadmap yet. Finish onboarding or take the <a href="{{ url_for('main.placement') }}">placement test</a>, or regenerate in Settings.</p>
+  {% endif %}
+
+  <ol class="roadmap-levels roadmap-page">
+    {% for level in progress.levels %}
+    <li class="roadmap-level is-{{ level.status }}">
+      <div class="roadmap-level-header">
+        <span class="roadmap-level-marker" aria-hidden="true">
+          {% if level.status == "completed" %}✓{% elif level.status == "active" %}●{% else %}○{% endif %}
+        </span>
+        <div>
+          <strong>{{ level.title }}</strong>
+          {% if level.status == "active" %}
+          <span class="muted">· {{ level.words_mastered }}/{{ level.target_word_count }} words</span>
+          {% elif level.status == "completed" %}
+          <span class="muted">· complete</span>
+          {% else %}
+          <span class="muted">· locked</span>
+          {% endif %}
+          {% if level.description %}
+          <p class="muted" style="margin: 6px 0 0;">{{ level.description }}</p>
+          {% endif %}
+          {% if level.topics %}
+          <div class="topic-tags">
+            {% for topic in level.topics %}
+            <span class="topic-tag">{{ topic }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% if level.status == "active" %}
+      <div class="roadmap-progress-bar" role="progressbar" aria-valuenow="{{ level.progress_pct }}" aria-valuemin="0" aria-valuemax="100">
+        <span style="width: {{ level.progress_pct }}%"></span>
+      </div>
+      {% set study_theme = (level.topics[0] if level.topics else None) %}
+      <p style="margin-top: 12px;">
+        {% if study_theme %}
+        <a class="primary" style="text-decoration:none;display:inline-block;" href="{{ url_for('flashcards.index', theme=study_theme) }}">Study now</a>
+        {% else %}
+        <a class="primary" style="text-decoration:none;display:inline-block;" href="{{ url_for('flashcards.index') }}">Study now</a>
+        {% endif %}
+        <a class="secondary" style="text-decoration:none;display:inline-block;margin-left:8px;" href="{{ url_for('main.conversation') }}">Practice conversation</a>
+      </p>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endblock %}

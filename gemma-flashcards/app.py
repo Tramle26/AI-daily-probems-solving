@@ -23,8 +23,26 @@ def create_app():
     with app.app_context():
         import models  # noqa: F401, register all models with SQLAlchemy
         from models import VocabularyItem
+        from sqlalchemy import inspect, text
 
         db.create_all()
+
+        # SQLite create_all does not add columns to existing tables.
+        inspector = inspect(db.engine)
+        if "vocabulary_item" in inspector.get_table_names():
+            existing = {col["name"] for col in inspector.get_columns("vocabulary_item")}
+            alters = []
+            if "next_review_at" not in existing:
+                alters.append("ALTER TABLE vocabulary_item ADD COLUMN next_review_at DATETIME")
+            if "ease_factor" not in existing:
+                alters.append("ALTER TABLE vocabulary_item ADD COLUMN ease_factor FLOAT DEFAULT 2.5")
+            if "interval_days" not in existing:
+                alters.append("ALTER TABLE vocabulary_item ADD COLUMN interval_days INTEGER DEFAULT 1")
+            for stmt in alters:
+                db.session.execute(text(stmt))
+            if alters:
+                db.session.commit()
+
         VocabularyItem.query.filter_by(mastery_status="weak").update(
             {"mastery_status": "practice"}
         )

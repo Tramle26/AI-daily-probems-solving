@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+{% block title %}Conversation | Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Conversation practice</h1>
+  <p class="muted">Chat with Gemma using words from your library. Stay on topic and try to use your target vocabulary.</p>
+
+  <div id="setup" class="form-grid">
+    <label>Topic
+      <input type="text" id="topicInput" value="{{ default_topic }}" />
+    </label>
+    <label>Difficulty
+      <select id="difficulty">
+        {% for value, label in difficulties %}
+        <option value="{{ value }}" {% if profile.level == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div style="grid-column: 1 / -1;">
+      <p><strong>Target words</strong> <span class="muted">(pick up to 8)</span></p>
+      {% if recent_words %}
+      <div class="word-picker" id="wordPicker">
+        {% for item in recent_words %}
+        <label class="word-chip">
+          <input type="checkbox" value="{{ item.word }}" />
+          <span>{{ item.word }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted">No saved words yet. <a href="{{ url_for('flashcards.index') }}">Generate flashcards</a> or browse the <a href="{{ url_for('main.library') }}">library</a>.</p>
+      {% endif %}
+    </div>
+    <button type="button" id="startBtn" class="primary">Start conversation</button>
+  </div>
+
+  <p id="status" class="muted" style="margin-top: 12px;"></p>
+
+  <div id="chatPanel" hidden>
+    <div class="chat-meta muted" id="chatMeta"></div>
+    <div class="chat-log" id="chatLog" aria-live="polite"></div>
+    <form id="chatForm" class="chat-compose">
+      <input type="text" id="messageInput" placeholder="Type your reply…" autocomplete="off" required />
+      <button type="submit" class="primary" id="sendBtn">Send</button>
+      <button type="button" id="endBtn" class="secondary">End conversation</button>
+    </form>
+  </div>
+
+  <div id="summaryModal" class="list-card" hidden style="margin-top: 24px;">
+    <h2>Session summary</h2>
+    <p id="summaryText"></p>
+    <p><strong>Used well:</strong> <span id="usedWords" class="muted"></span></p>
+    <p><strong>Missed:</strong> <span id="missedWords" class="muted"></span></p>
+    <p><strong>Corrections:</strong></p>
+    <ul id="correctionsList"></ul>
+    <p style="margin-top: 12px;">
+      <a href="{{ url_for('main.review') }}">Review weak words →</a>
+      · <a href="{{ url_for('main.library', status='practice') }}">Open practice list →</a>
+    </p>
+  </div>
+</section>
+
+<script>
+  let sessionId = null
+  let busy = false
+
+  const setup = document.getElementById("setup")
+  const statusEl = document.getElementById("status")
+  const chatPanel = document.getElementById("chatPanel")
+  const chatLog = document.getElementById("chatLog")
+  const chatMeta = document.getElementById("chatMeta")
+  const summaryModal = document.getElementById("summaryModal")
+  const startBtn = document.getElementById("startBtn")
+  const sendBtn = document.getElementById("sendBtn")
+  const messageInput = document.getElementById("messageInput")
+
+  // Warm the local embedding model in the background so later features stay snappy.
+  fetch("/api/embeddings/warmup", { method: "POST" }).catch(() => {})
+
+  function selectedWords() {
+    return Array.from(document.querySelectorAll("#wordPicker input:checked"))
+      .map((el) => el.value)
+      .slice(0, 8)
+  }
+
+  function setBusy(next) {
+    busy = next
+    startBtn.disabled = next
+    sendBtn.disabled = next
+    messageInput.disabled = next
+  }
+
+  function escapeHtml(text) {
+    return String(text)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+  }
+
+  function appendMessage(role, content) {
+    const row = document.createElement("div")
+    row.className = "chat-bubble is-" + role
+    row.innerHTML = `<span class="chat-role">${role === "assistant" ? "Gemma" : "You"}</span><p>${escapeHtml(content)}</p>`
+    chatLog.appendChild(row)
+    chatLog.scrollTop = chatLog.scrollHeight
+    return row
+  }
+
+  function beginAssistantBubble() {
+    const row = document.createElement("div")
+    row.className = "chat-bubble is-assistant is-streaming"
+    row.innerHTML = `<span class="chat-role">Gemma</span><p></p>`
+    chatLog.appendChild(row)
+    chatLog.scrollTop = chatLog.scrollHeight
+    return row.querySelector("p")
+  }
+
+  async function readSse(response, handlers) {
+    if (!response.ok) {
+      let message = "Request failed."
+      try {
+        const data = await response.json()
+        message = data.error || message
+      } catch (_) {}
+      throw new Error(message)
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const chunks = buffer.split("\n\n")
+      buffer = chunks.pop() || ""
+
+      for (const chunk of chunks) {
+        const lines = chunk.split("\n")
+        let eventName = "message"
+        const dataLines = []
+        for (const line of lines) {
+          if (line.startsWith("event:")) eventName = line.slice(6).trim()
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim())
+        }
+        if (!dataLines.length) continue
+        let payload = {}
+        try {
+          payload = JSON.parse(dataLines.join("\n"))
+        } catch (_) {
+          continue
+        }
+        const handler = handlers[eventName]
+        if (handler) await handler(payload)
+      }
+    }
+  }
+
+  document.getElementById("startBtn").addEventListener("click", async () => {
+    if (busy) return
+    setBusy(true)
+    statusEl.textContent = "Starting…"
+    summaryModal.hidden = true
+    const payload = {
+      topic: document.getElementById("topicInput").value.trim() || "daily life",
+      difficulty: document.getElementById("difficulty").value,
+      target_words: selectedWords(),
+    }
+
+    try {
+      setup.hidden = true
+      chatPanel.hidden = false
+      chatLog.innerHTML = ""
+      chatMeta.textContent = `Topic: ${payload.topic}`
+
+      const res = await fetch("/api/conversation/start?stream=1", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(payload),
+      })
+
+      let targetEl = null
+      let failed = false
+
+      await readSse(res, {
+        meta: (data) => {
+          sessionId = data.session_id
+          chatMeta.textContent = `Topic: ${data.topic} · Targets: ${(data.target_words || []).join(", ") || "free practice"}`
+          statusEl.textContent = "Gemma is writing…"
+          targetEl = beginAssistantBubble()
+        },
+        token: (data) => {
+          if (!targetEl) targetEl = beginAssistantBubble()
+          targetEl.textContent += data.text || ""
+          chatLog.scrollTop = chatLog.scrollHeight
+        },
+        done: (data) => {
+          sessionId = data.session_id || sessionId
+          if (targetEl) {
+            targetEl.textContent = data.reply || targetEl.textContent
+            targetEl.closest(".chat-bubble")?.classList.remove("is-streaming")
+          } else if (data.reply) {
+            appendMessage("assistant", data.reply)
+          }
+          statusEl.textContent = ""
+        },
+        error: (data) => {
+          failed = true
+          statusEl.textContent = data.error || "Could not start."
+          setup.hidden = false
+          chatPanel.hidden = true
+        },
+      })
+
+      if (!sessionId && !failed) {
+        statusEl.textContent = "Could not start."
+        setup.hidden = false
+        chatPanel.hidden = true
+      }
+    } catch (err) {
+      statusEl.textContent = err.message || "Network error."
+      setup.hidden = false
+      chatPanel.hidden = true
+    } finally {
+      setBusy(false)
+    }
+  })
+
+  document.getElementById("chatForm").addEventListener("submit", async (event) => {
+    event.preventDefault()
+    const text = messageInput.value.trim()
+    if (!text || !sessionId || busy) return
+
+    appendMessage("user", text)
+    messageInput.value = ""
+    setBusy(true)
+    statusEl.textContent = "Gemma is writing…"
+
+    const targetEl = beginAssistantBubble()
+
+    try {
+      const res = await fetch(`/api/conversation/${sessionId}/message?stream=1`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({ message: text }),
+      })
+
+      await readSse(res, {
+        token: (data) => {
+          targetEl.textContent += data.text || ""
+          chatLog.scrollTop = chatLog.scrollHeight
+        },
+        done: (data) => {
+          targetEl.textContent = data.reply || targetEl.textContent
+          targetEl.closest(".chat-bubble")?.classList.remove("is-streaming")
+          statusEl.textContent = ""
+        },
+        error: (data) => {
+          targetEl.textContent = data.error || "Reply failed."
+          statusEl.textContent = data.error || "Reply failed."
+        },
+      })
+    } catch (err) {
+      targetEl.textContent = err.message || "Network error."
+      statusEl.textContent = err.message || "Network error."
+    } finally {
+      setBusy(false)
+      messageInput.focus()
+    }
+  })
+
+  document.getElementById("endBtn").addEventListener("click", async () => {
+    if (!sessionId || busy) return
+    setBusy(true)
+    statusEl.textContent = "Summarizing…"
+    try {
+      const res = await fetch(`/api/conversation/${sessionId}/finish`, { method: "POST" })
+      const data = await res.json()
+      statusEl.textContent = ""
+      if (!res.ok) {
+        statusEl.textContent = data.error || "Could not finish."
+        return
+      }
+      chatPanel.hidden = true
+      summaryModal.hidden = false
+      document.getElementById("summaryText").textContent = data.summary || ""
+      document.getElementById("usedWords").textContent = (data.words_used_correctly || []).join(", ") || "—"
+      document.getElementById("missedWords").textContent = (data.words_missed || []).join(", ") || "—"
+      const list = document.getElementById("correctionsList")
+      list.innerHTML = ""
+      ;(data.corrections || []).forEach((c) => {
+        const li = document.createElement("li")
+        li.textContent = c
+        list.appendChild(li)
+      })
+      if (!(data.corrections || []).length) {
+        list.innerHTML = "<li class='muted'>No major corrections.</li>"
+      }
+    } catch (_) {
+      statusEl.textContent = "Network error."
+    } finally {
+      setBusy(false)
+    }
+  })
+</script>
+{% endblock %}

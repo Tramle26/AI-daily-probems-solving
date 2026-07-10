@@ -128,6 +128,13 @@
     <a href="{{ url_for('main.library', status=value, q=search or none) }}" class="{% if status == value %}active{% endif %}">{{ mastery_labels.get(value, value) }}</a>
     {% endfor %}
   </div>
+  {% if status == "practice" %}
+  <p class="search-meta muted">
+    Weak / practice words —
+    <a href="{{ url_for('main.review') }}">Start review →</a>
+    · <a href="{{ url_for('main.conversation') }}">Use in conversation →</a>
+  </p>
+  {% endif %}
 
   {% if search %}
   <p class="search-meta muted">

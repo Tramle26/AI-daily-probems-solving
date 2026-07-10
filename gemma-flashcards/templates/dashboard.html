@@ -71,6 +71,46 @@
         <span class="streak-legend-item"><span class="streak-cell is-active"></span> Studied</span>
       </div>
     </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <div>
+          <h2>Mastery breakdown</h2>
+          <p class="muted chart-subtitle">Where your vocabulary sits today</p>
+        </div>
+      </div>
+      <div class="chart-wrap chart-wrap-doughnut">
+        <canvas id="masteryChart" aria-label="Mastery status doughnut"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="list-card weekly-report-card" style="margin-top: 24px;">
+    <div class="chart-card-header">
+      <div>
+        <h2>This week's report</h2>
+        <p class="muted chart-subtitle">AI narrative from your recent study stats</p>
+      </div>
+      <button type="button" id="refreshReportBtn" class="secondary">Refresh report</button>
+    </div>
+    <p id="weeklyReportStatus" class="muted">Loading report…</p>
+    <div id="weeklyReportBody" hidden>
+      <p id="weeklyNarrative"></p>
+      <div class="report-columns">
+        <div>
+          <strong>Strong areas</strong>
+          <ul id="reportStrengths"></ul>
+        </div>
+        <div>
+          <strong>Focus areas</strong>
+          <ul id="reportWeak"></ul>
+        </div>
+        <div>
+          <strong>Suggested topics</strong>
+          <ul id="reportTopics"></ul>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="section-grid">
@@ -86,7 +126,10 @@
         </li>
         {% endfor %}
       </ul>
-      <p><a href="{{ url_for('main.library', status='new') }}">Browse library →</a></p>
+      <p>
+        <a href="{{ url_for('main.library', status='new') }}">Browse library →</a>
+        · <a href="{{ url_for('main.conversation') }}">Practice conversation →</a>
+      </p>
       {% else %}
       <p class="muted">No new or learning words yet.</p>
       <p><a href="{{ url_for('flashcards.index') }}">Generate flashcards →</a></p>
@@ -119,6 +162,13 @@
               {% else %}
               <span class="muted">· locked</span>
               {% endif %}
+              {% if level.topics %}
+              <div class="topic-tags">
+                {% for topic in level.topics[:4] %}
+                <span class="topic-tag">{{ topic }}</span>
+                {% endfor %}
+              </div>
+              {% endif %}
             </div>
           </div>
           {% if level.status == "active" %}
@@ -129,7 +179,7 @@
         </li>
         {% endfor %}
       </ol>
-      <p><a href="{{ url_for('flashcards.index') }}">Continue studying →</a></p>
+      <p><a href="{{ url_for('main.roadmap_view') }}">Open full roadmap →</a></p>
     </div>
   </div>
 </section>
@@ -138,6 +188,7 @@
   (function () {
     const initialData = {{ charts | tojson }};
     const chartCanvas = document.getElementById("wordsChart");
+    const masteryCanvas = document.getElementById("masteryChart");
     const roadmapEl = document.getElementById("streakRoadmap");
     const wordsTotalEl = document.getElementById("wordsTotal");
     const activeDaysEl = document.getElementById("activeDays");
@@ -146,6 +197,7 @@
     if (!chartCanvas || !roadmapEl) return;
 
     let wordsChart = null;
+    let masteryChart = null;
 
     function renderRoadmap(days) {
       roadmapEl.innerHTML = "";
@@ -209,11 +261,49 @@
       });
     }
 
+    function renderMastery(breakdown) {
+      if (!masteryCanvas) return;
+      const labels = ["New", "Learning", "Practice", "Mastered"];
+      const values = [
+        breakdown.new || 0,
+        breakdown.learning || 0,
+        breakdown.practice || 0,
+        breakdown.mastered || 0,
+      ];
+      if (masteryChart) {
+        masteryChart.data.datasets[0].data = values;
+        masteryChart.update();
+        return;
+      }
+      masteryChart = new Chart(masteryCanvas, {
+        type: "doughnut",
+        data: {
+          labels,
+          datasets: [{
+            data: values,
+            backgroundColor: ["#f5d0d0", "#ffd54f", "#e89191", "#d66b6b"],
+            borderWidth: 0,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: "bottom",
+              labels: { color: "#5c2e2e", boxWidth: 12 },
+            },
+          },
+        },
+      });
+    }
+
     function applyCharts(data) {
       renderChart(data.words_series);
       renderRoadmap(data.streak_roadmap.days || []);
       activeDaysEl.textContent = data.streak_roadmap.active_days || 0;
       consistencyEl.textContent = data.streak_roadmap.consistency || 0;
+      renderMastery(data.mastery_breakdown || {});
     }
 
     async function loadRange(range) {
@@ -233,6 +323,51 @@
     rangeButtons.forEach((btn) => {
       btn.addEventListener("click", () => loadRange(btn.dataset.range));
     });
+
+    const reportStatus = document.getElementById("weeklyReportStatus");
+    const reportBody = document.getElementById("weeklyReportBody");
+    const refreshBtn = document.getElementById("refreshReportBtn");
+
+    function fillList(el, items) {
+      el.innerHTML = "";
+      (items || []).forEach((item) => {
+        const li = document.createElement("li");
+        li.textContent = item;
+        el.appendChild(li);
+      });
+      if (!(items || []).length) {
+        el.innerHTML = "<li class='muted'>—</li>";
+      }
+    }
+
+    async function loadWeeklyReport(refresh) {
+      reportStatus.hidden = false;
+      reportStatus.textContent = refresh ? "Refreshing report…" : "Loading report…";
+      reportBody.hidden = true;
+      try {
+        const url = "/api/progress/weekly-report" + (refresh ? "?refresh=1" : "");
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok) {
+          reportStatus.textContent = data.error || "Could not load report.";
+          return;
+        }
+        const report = data.report || {};
+        document.getElementById("weeklyNarrative").textContent = report.narrative || "";
+        fillList(document.getElementById("reportStrengths"), report.strong_areas);
+        fillList(document.getElementById("reportWeak"), report.weak_areas);
+        fillList(document.getElementById("reportTopics"), report.suggested_topics);
+        reportStatus.hidden = true;
+        reportBody.hidden = false;
+      } catch (_) {
+        reportStatus.textContent = "Network error loading report.";
+      }
+    }
+
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", () => loadWeeklyReport(true));
+      loadWeeklyReport(false);
+    }
   })();
 </script>
 {% endblock %}

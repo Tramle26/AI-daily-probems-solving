@@ -2,7 +2,7 @@ import re
 
 from extensions import db
 from models import Flashcard, FlashcardDeck, VocabularyItem
-from services.embeddings import cosine_similarity, embed_text
+from services.embeddings import cosine_similarity, embed_text, is_model_loaded
 
 _HAS_LETTER_RE = re.compile(r"[A-Za-z\u00C0-\u024F]", re.UNICODE)
 
@@ -88,6 +88,7 @@ def save_deck(title, language, source_type, cards, source_id=None, document_id=N
     db.session.commit()
     return deck
 
+
 def get_related_by_topic(theme, language, limit=15):
     """Find prior vocabulary whose topic overlaps the new theme (simple keyword match)."""
     keyword = theme.split()[0].lower()  # e.g. "soccer" or "World"
@@ -135,6 +136,42 @@ def find_similar_vocab(word, language, top_k=5, exclude_word=None):
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [item for _, item in scored[:top_k]]
+
+
+def related_words_for_conversation(topic, language, target_words, limit=8):
+    """
+    Prefer embedding neighbors when the model is already warm.
+    Otherwise fall back to topic tags so conversation start stays instant.
+    """
+    targets = {w.lower() for w in (target_words or [])}
+    related = []
+
+    if is_model_loaded():
+        for word in (target_words or [])[:3]:
+            try:
+                neighbors = find_similar_vocab(word, language, top_k=3, exclude_word=word)
+                related.extend(v.word for v in neighbors)
+            except Exception:
+                pass
+
+    if len(related) < limit:
+        try:
+            prior = get_related_by_topic(topic or "daily", language, limit=limit + len(targets))
+            related.extend(v.word for v in prior)
+        except Exception:
+            pass
+
+    deduped = []
+    seen = set(targets)
+    for word in related:
+        key = word.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(word)
+        if len(deduped) >= limit:
+            break
+    return deduped
 
 
 def build_embedding_continuity_context(theme, language, top_k=10):

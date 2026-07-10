@@ -1,10 +1,17 @@
 import os
 
-from flask import Blueprint, render_template, request, redirect, url_for, g, session, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, g, session, current_app, jsonify
 from google import genai
 
 from extensions import db
-from models import AskHistory, DocumentChunk, FlashcardDeck, UploadedDocument, VocabularyItem
+from models import (
+    AskHistory,
+    DocumentChunk,
+    FlashcardDeck,
+    PlacementSession,
+    UploadedDocument,
+    VocabularyItem,
+)
 from services.documents import (
     delete_document,
     extract_text_from_file,
@@ -13,9 +20,14 @@ from services.documents import (
     rows_to_cards,
     save_document,
 )
-from services.gemma import fill_missing_card_fields
+from services.gemma import (
+    evaluate_placement,
+    fill_missing_card_fields,
+    generate_placement_questions,
+)
 from services.profile import get_profile, update_streak
 from services.review import get_review_queue
+from services.roadmap import generate_roadmap_for_profile, get_roadmap_progress
 from services.vocabulary import save_deck
 
 bp = Blueprint("main", __name__)
@@ -39,6 +51,36 @@ LEVELS = [
 
 COLUMN_FIELDS = ["word", "meaning", "example", "topic", "difficulty", "notes"]
 
+LEVEL_ALIASES = {
+    "a1": "beginner",
+    "beginner": "beginner",
+    "a2": "elementary",
+    "elementary": "elementary",
+    "pre-intermediate": "elementary",
+    "b1": "intermediate",
+    "intermediate": "intermediate",
+    "b2": "advanced",
+    "upper-intermediate": "advanced",
+    "advanced": "advanced",
+    "c1": "expert",
+    "c2": "expert",
+    "expert": "expert",
+    "proficient": "expert",
+}
+
+
+def map_estimated_level(raw: str) -> str:
+    if not raw:
+        return "beginner"
+    key = raw.strip().lower().replace("_", "-")
+    if key in LEVEL_ALIASES:
+        return LEVEL_ALIASES[key]
+    for alias, mapped in LEVEL_ALIASES.items():
+        if alias in key:
+            return mapped
+    valid = {value for value, _ in LEVELS}
+    return raw if raw in valid else "beginner"
+
 
 @bp.before_app_request
 def load_profile():
@@ -49,9 +91,12 @@ def load_profile():
 def require_onboarding():
     if request.endpoint and request.endpoint.startswith("static"):
         return
-    if request.endpoint in ("main.onboarding", "flashcards.stream"):
+    if request.endpoint in ("main.onboarding", "flashcards.stream", "main.placement"):
         return
-    if request.endpoint and request.endpoint.startswith("api."):
+    if request.endpoint and (
+        request.endpoint.startswith("api.")
+        or request.endpoint.startswith("main.placement_")
+    ):
         return
     profile = get_profile()
     if profile.goal is None and request.endpoint != "main.onboarding":
@@ -72,6 +117,12 @@ def onboarding():
         profile.level = request.form.get("level") or None
         profile.goal = request.form.get("goal") or None
         db.session.commit()
+        try:
+            generate_roadmap_for_profile(profile)
+        except Exception as exc:
+            current_app.logger.warning("Roadmap generation failed: %s", exc)
+        if request.form.get("take_placement"):
+            return redirect(url_for("main.placement"))
         return redirect(url_for("main.dashboard"))
     return render_template(
         "onboarding.html",
@@ -86,6 +137,19 @@ def onboarding():
 def settings():
     profile = get_profile()
     if request.method == "POST":
+        action = request.form.get("action") or "save"
+        if action == "regenerate_roadmap":
+            profile.target_language = request.form.get("target_language") or profile.target_language
+            profile.native_language = request.form.get("native_language") or profile.native_language
+            profile.level = request.form.get("level") or profile.level
+            profile.goal = request.form.get("goal") or profile.goal
+            db.session.commit()
+            try:
+                generate_roadmap_for_profile(profile)
+            except Exception as exc:
+                current_app.logger.warning("Roadmap regeneration failed: %s", exc)
+            return redirect(url_for("main.roadmap_view"))
+
         profile.target_language = request.form["target_language"]
         profile.native_language = request.form["native_language"]
         profile.level = request.form.get("level") or None
@@ -252,3 +316,134 @@ def ask():
     docs = UploadedDocument.query.order_by(UploadedDocument.uploaded_at.desc()).all()
     history = AskHistory.query.order_by(AskHistory.created_at.desc()).limit(20).all()
     return render_template("ask.html", documents=docs, history=history)
+
+
+@bp.route("/placement")
+def placement():
+    return render_template("placement.html", profile=g.profile)
+
+
+@bp.post("/api/placement/start")
+def placement_start():
+    profile = get_profile()
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    try:
+        client = genai.Client(api_key=api_key)
+        question_set = generate_placement_questions(client, profile, count=10)
+    except Exception as exc:
+        return jsonify({"error": f"Could not generate placement test: {exc}"}), 500
+
+    stored = []
+    public = []
+    for q in question_set.questions[:10]:
+        stored.append(
+            {
+                "question": q.question,
+                "question_type": q.question_type,
+                "options": q.options or [],
+                "correct": q.correct,
+                "skill": q.skill,
+            }
+        )
+        public.append(
+            {
+                "question": q.question,
+                "question_type": q.question_type,
+                "options": q.options or [],
+                "skill": q.skill,
+            }
+        )
+
+    session["placement_questions"] = stored
+    return jsonify({"questions": public})
+
+
+@bp.post("/api/placement/submit")
+def placement_submit():
+    profile = get_profile()
+    data = request.get_json() or {}
+    answers = data.get("answers") or []
+    stored = session.get("placement_questions") or []
+    if not stored:
+        return jsonify({"error": "No active placement test. Start again."}), 400
+
+    graded = []
+    for i, question in enumerate(stored):
+        user_answer = ""
+        if i < len(answers):
+            user_answer = str(answers[i] or "").strip()
+        correct = str(question.get("correct") or "").strip()
+        is_correct = user_answer.lower() == correct.lower()
+        graded.append(
+            {
+                **question,
+                "user_answer": user_answer,
+                "is_correct": is_correct,
+            }
+        )
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    try:
+        client = genai.Client(api_key=api_key)
+        evaluation = evaluate_placement(client, profile, graded)
+    except Exception as exc:
+        return jsonify({"error": f"Evaluation failed: {exc}"}), 500
+
+    mapped_level = map_estimated_level(evaluation.estimated_level)
+    profile.level = mapped_level
+
+    placement = PlacementSession(
+        estimated_level=mapped_level,
+        weak_areas=evaluation.weak_areas,
+        strengths=evaluation.strengths,
+        raw_evaluation=evaluation.model_dump(),
+    )
+    db.session.add(placement)
+    db.session.commit()
+
+    try:
+        generate_roadmap_for_profile(profile, placement_result=evaluation)
+    except Exception as exc:
+        current_app.logger.warning("Roadmap after placement failed: %s", exc)
+
+    session.pop("placement_questions", None)
+
+    return jsonify(
+        {
+            "estimated_level": mapped_level,
+            "weak_areas": evaluation.weak_areas,
+            "strengths": evaluation.strengths,
+            "summary": evaluation.summary,
+            "redirect": url_for("main.roadmap_view"),
+        }
+    )
+
+
+@bp.route("/roadmap")
+def roadmap_view():
+    progress = get_roadmap_progress(g.profile)
+    return render_template("roadmap.html", progress=progress, profile=g.profile)
+
+
+@bp.route("/conversation")
+def conversation():
+    items = VocabularyItem.query.order_by(VocabularyItem.first_seen_at.desc()).limit(30).all()
+    progress = get_roadmap_progress(g.profile)
+    default_topic = "daily life"
+    for level in progress.get("levels") or []:
+        if level.get("status") == "active" and level.get("topics"):
+            default_topic = level["topics"][0]
+            break
+    return render_template(
+        "conversation.html",
+        recent_words=items,
+        default_topic=default_topic,
+        profile=g.profile,
+        difficulties=LEVELS,
+    )

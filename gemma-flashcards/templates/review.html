@@ -3,7 +3,8 @@
 {% block content %}
 <section class="panel">
   <h1>Review session</h1>
-  <p class="muted" id="queueCount">{{ items|length }} words in your review queue</p>
+  <p class="muted" id="queueCount">{{ items|length }} words due for spaced repetition</p>
+  <p class="muted">SM-2 scheduling: “Got it” spaces the word further out; “Still learning” brings it back sooner.</p>
 
   {% if items %}
   <div id="reviewCard" class="list-card" style="margin-top: 16px; min-height: 180px;">
@@ -54,6 +55,7 @@
   let quizQuestions = []
   let quizIndex = 0
   let quizAnswers = []
+  const nextReviews = []
 
   const cardProgress = document.querySelector("#cardProgress")
   const cardWord = document.querySelector("#cardWord")
@@ -82,11 +84,17 @@
   })
 
   async function submitFeedback(gotIt) {
-    await fetch("/api/review/feedback", {
+    const res = await fetch("/api/review/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ vocab_id: items[index], got_it: gotIt }),
     })
+    try {
+      const data = await res.json()
+      if (data.interval_days != null) {
+        nextReviews.push({ word: itemData[items[index]].word, days: data.interval_days })
+      }
+    } catch (_) {}
     index += 1
     if (index < items.length) {
       showCard()
@@ -161,7 +169,13 @@
     const data = await res.json()
     miniQuiz.hidden = true
     results.hidden = false
-    document.querySelector("#resultText").textContent = `Review complete. Mini quiz score: ${data.score} / ${data.total}.`
+    let scheduleNote = ""
+    if (nextReviews.length) {
+      const sample = nextReviews.slice(0, 3).map((r) => `${r.word} in ${r.days} day${r.days === 1 ? "" : "s"}`).join("; ")
+      scheduleNote = ` Next review: ${sample}.`
+    }
+    document.querySelector("#resultText").textContent =
+      `Review complete. Mini quiz score: ${data.score} / ${data.total}.${scheduleNote}`
   }
 
   showCard()

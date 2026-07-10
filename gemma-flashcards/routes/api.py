@@ -1,18 +1,30 @@
 import os
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, session, stream_with_context
 from google import genai
 
 from extensions import db
-from models import AskHistory, DictionarySearch, QuizSession, UploadedDocument, VocabularyItem
+from models import (
+    AskHistory,
+    ConversationSession,
+    DictionarySearch,
+    QuizSession,
+    UploadedDocument,
+    VocabularyItem,
+)
 from services.gemma import (
     ask_document_smart,
+    build_conversation_system_prompt,
+    conversation_reply,
+    conversation_reply_stream,
     dictionary_lookup,
     extract_document_vocabulary,
     extract_vocab_from_answer,
+    sse,
+    summarize_conversation,
 )
 from services.profile import get_profile
-from services.progress import get_progress_charts
+from services.progress import generate_weekly_report, get_progress_charts, upsert_daily_snapshot
 from services.quiz import (
     build_fill_blank,
     build_multiple_choice,
@@ -21,7 +33,14 @@ from services.quiz import (
 )
 from services.retrieval import index_document
 from services.review import mark_review_feedback
-from services.vocabulary import find_similar_vocab, is_valid_vocab_word, save_deck, upsert_vocabulary
+from services.roadmap import check_level_completion
+from services.vocabulary import (
+    find_similar_vocab,
+    is_valid_vocab_word,
+    related_words_for_conversation,
+    save_deck,
+    upsert_vocabulary,
+)
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -30,6 +49,24 @@ bp = Blueprint("api", __name__, url_prefix="/api")
 def progress_charts():
     range_key = request.args.get("range", "week")
     return jsonify(get_progress_charts(range_key))
+
+
+@bp.get("/progress/weekly-report")
+def weekly_report():
+    force = request.args.get("refresh") == "1"
+    cached = session.get("weekly_report")
+    if cached and not force:
+        payload = dict(cached)
+        payload["cached"] = True
+        return jsonify({"report": payload})
+
+    try:
+        report = generate_weekly_report()
+    except Exception as exc:
+        return jsonify({"error": f"Report failed: {exc}"}), 500
+
+    session["weekly_report"] = report
+    return jsonify({"report": report})
 
 
 @bp.post("/decks")
@@ -46,6 +83,8 @@ def create_deck():
         source_id=data.get("source_id"),
         document_id=data.get("document_id"),
     )
+    upsert_daily_snapshot()
+    check_level_completion()
     return jsonify({"id": deck.id, "title": deck.title}), 201
 
 
@@ -188,14 +227,21 @@ def quiz_submit():
     session = QuizSession.query.get_or_404(data["session_id"])
     score, total = grade_and_update_mastery(session, data["answers"])
     accuracy = round(score / total * 100) if total else 0
+    upsert_daily_snapshot()
+    check_level_completion()
     return jsonify({"score": score, "total": total, "accuracy": accuracy})
 
 
 @bp.post("/review/feedback")
 def review_feedback():
     data = request.get_json()
-    mark_review_feedback(data["vocab_id"], data["got_it"])
-    return jsonify({"ok": True})
+    item = mark_review_feedback(data["vocab_id"], data["got_it"])
+    check_level_completion()
+    payload = {"ok": True}
+    if item and item.next_review_at:
+        payload["next_review_at"] = item.next_review_at.isoformat()
+        payload["interval_days"] = item.interval_days
+    return jsonify(payload)
 
 
 @bp.post("/review/mini-quiz")
@@ -205,6 +251,8 @@ def review_mini_quiz():
     db.session.add(session)
     db.session.flush()
     score, total = grade_and_update_mastery(session, data["answers"])
+    upsert_daily_snapshot()
+    check_level_completion()
     return jsonify({"score": score, "total": total})
 
 
@@ -278,3 +326,239 @@ def vocabulary_similar(vocab_id):
         "word": item.word,
         "similar": [{"word": v.word, "meaning": v.meaning, "topic": v.topic} for v in similar],
     })
+
+@bp.post("/conversation/start")
+def conversation_start():
+    data = request.get_json() or {}
+    profile = get_profile()
+    topic = (data.get("topic") or "daily life").strip()
+    difficulty = data.get("difficulty") or profile.level or "beginner"
+    target_words = [w.strip() for w in (data.get("target_words") or []) if w and str(w).strip()]
+    target_words = target_words[:8]
+
+    # Avoid cold-loading the embedding model here — that can take 10–30s.
+    related_words = related_words_for_conversation(
+        topic, profile.target_language, target_words, limit=8
+    )
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    system_prompt = build_conversation_system_prompt(
+        profile.target_language,
+        topic,
+        difficulty,
+        target_words,
+        related_words,
+        profile.native_language,
+    )
+
+    conv = ConversationSession(
+        topic=topic,
+        difficulty=difficulty,
+        target_words=target_words,
+        messages=[],
+    )
+    db.session.add(conv)
+    db.session.commit()
+
+    meta = {
+        "session_id": conv.id,
+        "topic": topic,
+        "difficulty": difficulty,
+        "target_words": target_words,
+        "related_words": related_words,
+    }
+
+    want_stream = (
+        request.args.get("stream") == "1"
+        or "text/event-stream" in (request.headers.get("Accept") or "")
+    )
+
+    try:
+        client = genai.Client(api_key=api_key)
+        if want_stream:
+
+            @stream_with_context
+            def generate():
+                yield sse("meta", meta)
+                parts = []
+                try:
+                    for chunk in conversation_reply_stream(client, system_prompt, []):
+                        parts.append(chunk)
+                        yield sse("token", {"text": chunk})
+                    opening = "".join(parts).strip()
+                    if not opening:
+                        yield sse("error", {"error": "Empty opening from model"})
+                        return
+                    messages = [{"role": "assistant", "content": opening}]
+                    conv.messages = messages
+                    from sqlalchemy.orm.attributes import flag_modified
+
+                    flag_modified(conv, "messages")
+                    db.session.commit()
+                    yield sse("done", {**meta, "messages": messages, "reply": opening})
+                except Exception as exc:
+                    db.session.rollback()
+                    yield sse("error", {"error": f"Conversation start failed: {exc}"})
+
+            return Response(
+                generate(),
+                mimetype="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        opening = conversation_reply(client, system_prompt, [])
+    except Exception as exc:
+        return jsonify({"error": f"Conversation start failed: {exc}"}), 500
+
+    messages = [{"role": "assistant", "content": opening}]
+    conv.messages = messages
+    from sqlalchemy.orm.attributes import flag_modified
+
+    flag_modified(conv, "messages")
+    db.session.commit()
+
+    return jsonify({**meta, "messages": messages})
+
+
+@bp.post("/conversation/<int:session_id>/message")
+def conversation_message(session_id):
+    data = request.get_json() or {}
+    user_text = (data.get("message") or "").strip()
+    if not user_text:
+        return jsonify({"error": "Message required"}), 400
+
+    conv = ConversationSession.query.get_or_404(session_id)
+    if conv.finished_at:
+        return jsonify({"error": "Conversation already finished"}), 400
+
+    profile = get_profile()
+    messages = list(conv.messages or [])
+    messages.append({"role": "user", "content": user_text})
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    system_prompt = build_conversation_system_prompt(
+        profile.target_language,
+        conv.topic or "daily life",
+        conv.difficulty or profile.level or "beginner",
+        conv.target_words or [],
+        [],
+        profile.native_language,
+    )
+
+    want_stream = (
+        request.args.get("stream") == "1"
+        or "text/event-stream" in (request.headers.get("Accept") or "")
+    )
+
+    try:
+        client = genai.Client(api_key=api_key)
+        if want_stream:
+
+            @stream_with_context
+            def generate():
+                parts = []
+                try:
+                    for chunk in conversation_reply_stream(client, system_prompt, messages):
+                        parts.append(chunk)
+                        yield sse("token", {"text": chunk})
+                    reply = "".join(parts).strip()
+                    if not reply:
+                        yield sse("error", {"error": "Empty reply from model"})
+                        return
+                    full_messages = messages + [{"role": "assistant", "content": reply}]
+                    conv.messages = full_messages
+                    from sqlalchemy.orm.attributes import flag_modified
+
+                    flag_modified(conv, "messages")
+                    db.session.commit()
+                    yield sse("done", {"reply": reply, "messages": full_messages})
+                except Exception as exc:
+                    db.session.rollback()
+                    yield sse("error", {"error": f"Reply failed: {exc}"})
+
+            return Response(
+                generate(),
+                mimetype="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        reply = conversation_reply(client, system_prompt, messages)
+    except Exception as exc:
+        return jsonify({"error": f"Reply failed: {exc}"}), 500
+
+    messages.append({"role": "assistant", "content": reply})
+    conv.messages = messages
+    from sqlalchemy.orm.attributes import flag_modified
+
+    flag_modified(conv, "messages")
+    db.session.commit()
+
+    return jsonify({"reply": reply, "messages": messages})
+
+
+@bp.post("/conversation/<int:session_id>/finish")
+def conversation_finish(session_id):
+    from datetime import datetime
+
+    conv = ConversationSession.query.get_or_404(session_id)
+    if conv.finished_at:
+        return jsonify(
+            {
+                "summary": conv.summary,
+                "words_used_correctly": conv.words_used_correctly or [],
+                "words_missed": conv.words_missed or [],
+                "corrections": conv.corrections or [],
+            }
+        )
+
+    profile = get_profile()
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    try:
+        client = genai.Client(api_key=api_key)
+        result = summarize_conversation(
+            client,
+            conv.messages or [],
+            conv.target_words or [],
+            profile.native_language,
+        )
+    except Exception as exc:
+        return jsonify({"error": f"Summary failed: {exc}"}), 500
+
+    conv.words_used_correctly = result.words_used_correctly
+    conv.words_missed = result.words_missed
+    conv.corrections = result.corrections
+    conv.summary = result.summary
+    conv.finished_at = datetime.utcnow()
+    db.session.commit()
+
+    return jsonify(
+        {
+            "summary": conv.summary,
+            "words_used_correctly": conv.words_used_correctly or [],
+            "words_missed": conv.words_missed or [],
+            "corrections": conv.corrections or [],
+        }
+    )
+
+
+@bp.post("/embeddings/warmup")
+def embeddings_warmup():
+    """Kick off embedding-model load without blocking the request."""
+    import threading
+
+    from services.embeddings import is_model_loaded, warmup_model
+
+    if is_model_loaded():
+        return jsonify({"ready": True, "warmed": False})
+
+    threading.Thread(target=warmup_model, daemon=True).start()
+    return jsonify({"ready": False, "warmed": True})

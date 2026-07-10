@@ -22,7 +22,8 @@ bp = Blueprint("flashcards", __name__)
 
 @bp.get("/flashcards")
 def index():
-    return render_template("flashcards.html")
+    theme = request.args.get("theme", "").strip()
+    return render_template("flashcards.html", theme=theme)
 
 
 @bp.get("/stream")

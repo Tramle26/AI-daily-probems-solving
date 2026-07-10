@@ -103,6 +103,36 @@ def get_active_topics(limit: int = 5) -> list[dict]:
                 }
             )
 
+    # Fall back to active roadmap level topics when library is still empty.
+    if not topics:
+        try:
+            from models import Roadmap, RoadmapLevel
+
+            roadmap = Roadmap.query.order_by(Roadmap.created_at.desc()).first()
+            if roadmap:
+                active = (
+                    RoadmapLevel.query.filter_by(roadmap_id=roadmap.id, status="active")
+                    .order_by(RoadmapLevel.level_index)
+                    .first()
+                )
+                for label in (active.topics if active else None) or []:
+                    text = str(label).strip()
+                    if not text:
+                        continue
+                    category = classify_topic(text)
+                    topics.append(
+                        {
+                            "label": text,
+                            "count": 1,
+                            "category": category,
+                            "glyphs": get_topic_glyphs(category),
+                        }
+                    )
+                    if len(topics) >= limit:
+                        break
+        except Exception:
+            pass
+
     return topics
 
 

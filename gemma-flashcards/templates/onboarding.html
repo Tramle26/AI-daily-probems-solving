@@ -27,6 +27,7 @@
         {% endfor %}
       </select>
     </label>
+    <p class="muted">Not sure of your level? <a href="{{ url_for('main.placement') }}">Take placement test</a> after setup, or check the box below.</p>
     <label>Learning goal
       <select name="goal">
         <option value="">Choose one</option>
@@ -34,6 +35,10 @@
         <option value="{{ value }}" {% if profile.goal == value %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
+    </label>
+    <label class="checkbox-row">
+      <input type="checkbox" name="take_placement" value="1" />
+      Take placement test after saving
     </label>
     <button type="submit" class="primary">Start learning</button>
   </form>

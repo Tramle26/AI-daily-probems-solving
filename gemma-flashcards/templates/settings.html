@@ -35,7 +35,13 @@
         {% endfor %}
       </select>
     </label>
-    <button type="submit" class="primary">Save settings</button>
+    <button type="submit" name="action" value="save" class="primary">Save settings</button>
+    <button type="submit" name="action" value="regenerate_roadmap" class="secondary">Regenerate roadmap</button>
   </form>
+  <p class="muted" style="margin-top: 16px;">
+    Not sure of your level?
+    <a href="{{ url_for('main.placement') }}">Take placement test</a>
+    · <a href="{{ url_for('main.roadmap_view') }}">View roadmap</a>
+  </p>
 </section>
 {% endblock %}

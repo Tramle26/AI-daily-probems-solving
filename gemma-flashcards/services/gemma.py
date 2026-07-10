@@ -419,3 +419,336 @@ List the {max_words} most important {language} vocabulary items for this questio
 Explain meanings in {native_language}.
 Return JSON with items: word, meaning, example, topic, difficulty.
 """
+
+class PlacementQuestion(BaseModel):
+    question: str
+    question_type: str  # vocab_mc, fill_blank, reading
+    options: list[str] = []
+    correct: str
+    skill: str
+
+
+class PlacementQuestionSet(BaseModel):
+    questions: list[PlacementQuestion]
+
+
+class PlacementEvaluation(BaseModel):
+    estimated_level: str
+    weak_areas: list[str]
+    strengths: list[str]
+    summary: str
+
+
+def build_placement_questions_prompt(profile, count=10):
+    language = profile.target_language or "French"
+    native = profile.native_language or "English"
+    return f"""
+Create a placement test of exactly {count} mixed questions for a learner of {language}.
+Write question text in {native}. Target-language content (words, blanks, passages) stays in {language}.
+
+Mix question_type across: vocab_mc, fill_blank, reading.
+Each question needs:
+- question: the prompt text
+- question_type: one of vocab_mc, fill_blank, reading
+- options: 4 choices for vocab_mc / reading; empty list for fill_blank
+- correct: the exact correct answer string (must match one option for MC)
+- skill: short skill tag like vocabulary, grammar, reading, listening_proxy
+
+Cover a range from beginner to advanced so we can estimate level.
+Return JSON with questions array only.
+"""
+
+
+def generate_placement_questions(client, profile, count=10):
+    prompt = build_placement_questions_prompt(profile, count)
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.5,
+            response_mime_type="application/json",
+            response_schema=PlacementQuestionSet,
+        ),
+    )
+    return parse_model_json(response.text, PlacementQuestionSet)
+
+
+def build_placement_evaluation_prompt(profile, questions_with_answers):
+    language = profile.target_language or "French"
+    native = profile.native_language or "English"
+    lines = []
+    for i, item in enumerate(questions_with_answers, start=1):
+        lines.append(
+            f"{i}. skill={item.get('skill', '')} type={item.get('question_type', '')}\n"
+            f"   Q: {item.get('question', '')}\n"
+            f"   Correct: {item.get('correct', '')}\n"
+            f"   User: {item.get('user_answer', '')}\n"
+            f"   Match: {item.get('is_correct', False)}"
+        )
+    transcript = "\n".join(lines)
+    return f"""
+Evaluate this {language} placement test. Write summary and area labels in {native}.
+
+Results:
+{transcript}
+
+Return JSON with:
+- estimated_level: one of beginner, elementary, intermediate, advanced, expert
+  (or CEFR A1–C1 mapped to those words)
+- weak_areas: 2–5 short topic/skill labels
+- strengths: 2–5 short topic/skill labels
+- summary: 2–4 sentences for the learner
+"""
+
+
+def evaluate_placement(client, profile, questions_with_answers):
+    prompt = build_placement_evaluation_prompt(profile, questions_with_answers)
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.3,
+            response_mime_type="application/json",
+            response_schema=PlacementEvaluation,
+        ),
+    )
+    return parse_model_json(response.text, PlacementEvaluation)
+
+
+class WeeklyReport(BaseModel):
+    strong_areas: list[str] = []
+    weak_areas: list[str] = []
+    suggested_topics: list[str] = []
+    review_focus: list[str] = []
+    narrative: str = ""
+
+
+def build_weekly_report_prompt(profile, stats):
+    native = profile.native_language or "English"
+    language = profile.target_language or "French"
+    return f"""
+Write a weekly progress report for a {language} learner. Respond in {native}.
+
+Stats:
+- Words learned (total): {stats.get('total_words', 0)}
+- Mastered: {stats.get('mastered', 0)}
+- Practice / weak: {stats.get('practice', 0)}
+- Quiz accuracy (7d): {stats.get('accuracy', 0)}%
+- New words this week: {stats.get('words_this_week', 0)}
+- Active study days this week: {stats.get('active_days', 0)}
+- Current roadmap level: {stats.get('roadmap_level', 'n/a')}
+- Words to study: {', '.join(stats.get('study_words', []) or []) or 'none'}
+- Top topics: {', '.join(stats.get('topics', []) or []) or 'none'}
+
+Return JSON with:
+- strong_areas: short labels
+- weak_areas: short labels
+- suggested_topics: 3–5 topics to study next
+- review_focus: words or skills to review
+- narrative: 3–5 encouraging sentences summarizing the week
+"""
+
+
+def generate_weekly_report_text(client, profile, stats):
+    prompt = build_weekly_report_prompt(profile, stats)
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.5,
+            response_mime_type="application/json",
+            response_schema=WeeklyReport,
+        ),
+    )
+    return parse_model_json(response.text, WeeklyReport)
+
+
+class RoadmapLevelPlan(BaseModel):
+    level_index: int
+    title: str
+    description: str
+    topics: list[str]
+    target_word_count: int = 50
+
+
+class RoadmapPlan(BaseModel):
+    title: str
+    levels: list[RoadmapLevelPlan]
+
+
+def build_roadmap_prompt(profile, placement_result=None):
+    weak = ""
+    if placement_result is not None:
+        areas = getattr(placement_result, "weak_areas", None) or []
+        if areas:
+            weak = f"\nFocus extra practice on these weak areas: {', '.join(areas)}."
+
+    level = profile.level or "beginner"
+    goal = profile.goal or "general language learning"
+    return f"""
+Create a personalized 4-level learning roadmap for a student studying {profile.target_language}.
+Explain titles and descriptions in {profile.native_language}.
+
+Learner level: {level}
+Learning goal: {goal}
+{weak}
+
+Return JSON with:
+- title: short roadmap title
+- levels: exactly 4 levels, each with:
+  - level_index: 1 through 4
+  - title: short level name
+  - description: one sentence about what they will learn
+  - topics: 3–5 topic tags (lowercase English keywords like food, travel, work)
+  - target_word_count: integer around 40–60
+
+Rules:
+- Level 1 is foundational; level 4 is the most advanced for this learner.
+- Topics must be concrete vocabulary themes the app can match later.
+- Align the path with the learner's goal and current level.
+"""
+
+
+def generate_roadmap_plan(client, profile, placement_result=None):
+    prompt = build_roadmap_prompt(profile, placement_result)
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.5,
+            response_mime_type="application/json",
+            response_schema=RoadmapPlan,
+        ),
+    )
+    return parse_model_json(response.text, RoadmapPlan)
+
+
+class ConversationSummary(BaseModel):
+    words_used_correctly: list[str] = []
+    words_missed: list[str] = []
+    corrections: list[str] = []
+    summary: str = ""
+
+
+def build_conversation_system_prompt(
+    language, topic, difficulty, target_words, related_words, native_language
+):
+    targets = ", ".join(target_words) if target_words else "(none — free practice)"
+    related = ""
+    if related_words:
+        related = f"\nRelated words the learner has studied: {', '.join(related_words)}."
+
+    return f"""
+You are a friendly {language} conversation partner helping a language learner practice.
+Speak mostly in {language}. Keep replies short (1–3 sentences).
+Explain corrections briefly in {native_language} when needed.
+
+Topic: {topic}
+Difficulty: {difficulty}
+Target vocabulary the learner should try to use: {targets}
+{related}
+
+Rules:
+- Stay on the topic. Ask follow-up questions so the learner keeps talking.
+- If they misuse a target word, correct gently, then continue the conversation.
+- Do not dump long grammar lectures. Prefer natural dialogue.
+- Start with one short opening line that invites them into the topic
+  and naturally suggests using one of the target words.
+"""
+
+
+def build_conversation_summary_prompt(messages, target_words, native_language):
+    transcript = "\n".join(
+        f"{m.get('role', 'user').upper()}: {m.get('content', '')}"
+        for m in (messages or [])
+    )
+    targets = ", ".join(target_words) if target_words else "(none)"
+
+    return f"""
+You are evaluating a language-practice conversation.
+Write the summary and notes in {native_language}.
+
+Target vocabulary: {targets}
+
+Transcript:
+{transcript}
+
+Return JSON with:
+- words_used_correctly: target words the learner used correctly
+- words_missed: target words they never used or used wrongly
+- corrections: short list of important mistakes and the better form
+- summary: 2–4 sentences on how the practice went and what to review next
+"""
+
+
+def _conversation_contents(messages):
+    """Map stored chat turns to GenAI Content objects."""
+    contents = []
+    for message in messages or []:
+        role = message.get("role", "user")
+        text = message.get("content", "")
+        if not text:
+            continue
+        # GenAI uses "model" for assistant turns.
+        api_role = "model" if role == "assistant" else "user"
+        contents.append(
+            types.Content(role=api_role, parts=[types.Part.from_text(text=text)])
+        )
+    return contents
+
+
+def _conversation_generate_config(system_prompt):
+    return types.GenerateContentConfig(
+        temperature=0.7,
+        max_output_tokens=180,
+        system_instruction=system_prompt,
+    )
+
+
+def _conversation_request_contents(messages):
+    contents = _conversation_contents(messages)
+    if contents:
+        return contents
+    return [
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(text="Start the conversation.")],
+        )
+    ]
+
+
+def conversation_reply(client, system_prompt, messages):
+    """Generate the next assistant turn for an ongoing conversation."""
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=_conversation_request_contents(messages),
+        config=_conversation_generate_config(system_prompt),
+    )
+    return (response.text or "").strip()
+
+
+def conversation_reply_stream(client, system_prompt, messages):
+    """Yield text chunks as Gemma generates the next turn."""
+    stream = client.models.generate_content_stream(
+        model=GOOGLE_MODEL,
+        contents=_conversation_request_contents(messages),
+        config=_conversation_generate_config(system_prompt),
+    )
+    for chunk in stream:
+        text = getattr(chunk, "text", None)
+        if text:
+            yield text
+
+
+def summarize_conversation(client, messages, target_words, native_language):
+    prompt = build_conversation_summary_prompt(messages, target_words, native_language)
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.3,
+            response_mime_type="application/json",
+            response_schema=ConversationSummary,
+        ),
+    )
+    return parse_model_json(response.text, ConversationSummary)

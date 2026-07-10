@@ -1,4 +1,10 @@
-from models import VocabularyItem
+import os
+from datetime import datetime
+
+from google import genai
+
+from extensions import db
+from models import Roadmap, RoadmapLevel, VocabularyItem
 
 DEFAULT_ROADMAP_LEVELS = [
     {
@@ -29,41 +35,40 @@ DEFAULT_ROADMAP_LEVELS = [
 
 
 def _load_saved_roadmap():
-    try:
-        from models import Roadmap
-    except ImportError:
-        return None
-
     return Roadmap.query.order_by(Roadmap.created_at.desc()).first()
 
 
-def _progress_from_roadmap(roadmap):
-    from models import RoadmapLevel
+def _mastered_count_for_topics(topics):
+    if not topics:
+        return VocabularyItem.query.filter_by(mastery_status="mastered").count()
+    return VocabularyItem.query.filter(
+        VocabularyItem.mastery_status == "mastered",
+        VocabularyItem.topic.in_(topics),
+    ).count()
 
+
+def _progress_from_roadmap(roadmap):
     levels = (
         RoadmapLevel.query.filter_by(roadmap_id=roadmap.id)
         .order_by(RoadmapLevel.level_index)
         .all()
     )
-    current = next((level for level in levels if level.status == "active"), levels[-1] if levels else None)
+    current = next(
+        (level for level in levels if level.status == "active"),
+        levels[-1] if levels else None,
+    )
     serialized = []
 
     for level in levels:
         topics = level.topics or []
-        words_mastered = (
-            VocabularyItem.query.filter(
-                VocabularyItem.mastery_status == "mastered",
-                VocabularyItem.topic.in_(topics),
-            ).count()
-            if topics
-            else VocabularyItem.query.filter_by(mastery_status="mastered").count()
-        )
+        words_mastered = _mastered_count_for_topics(topics)
         target = level.target_word_count or 50
         serialized.append(
             {
                 "index": level.level_index,
                 "title": level.title,
                 "description": level.description or "",
+                "topics": topics,
                 "target_word_count": target,
                 "status": level.status,
                 "words_mastered": min(words_mastered, target),
@@ -108,6 +113,7 @@ def _estimated_progress(profile):
         levels.append(
             {
                 **template,
+                "topics": [],
                 "status": status,
                 "words_mastered": words_done,
                 "progress_pct": min(100, round(words_done / target * 100)) if target else 0,
@@ -134,3 +140,132 @@ def get_roadmap_progress(profile):
     if roadmap:
         return _progress_from_roadmap(roadmap)
     return _estimated_progress(profile)
+
+
+def _fallback_plan(profile):
+    """Static 4-level plan when Gemma is unavailable."""
+    language = profile.target_language or "your language"
+    return {
+        "title": f"{language} learning path",
+        "levels": [
+            {
+                "level_index": template["index"],
+                "title": template["title"],
+                "description": template["description"],
+                "topics": [],
+                "target_word_count": template["target_word_count"],
+            }
+            for template in DEFAULT_ROADMAP_LEVELS
+        ],
+    }
+
+
+def _plan_from_gemma(profile, placement_result=None):
+    from services.gemma import generate_roadmap_plan
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return _fallback_plan(profile)
+
+    client = genai.Client(api_key=api_key)
+    plan = generate_roadmap_plan(client, profile, placement_result)
+    by_index = {level.level_index: level for level in plan.levels}
+
+    serialized = []
+    for i, template in enumerate(DEFAULT_ROADMAP_LEVELS, start=1):
+        level = by_index.get(i)
+        if level is None and plan.levels:
+            # Model may return unordered levels without matching indexes.
+            level = plan.levels[i - 1] if i <= len(plan.levels) else None
+        if level is None:
+            serialized.append(
+                {
+                    "level_index": i,
+                    "title": template["title"],
+                    "description": template["description"],
+                    "topics": [],
+                    "target_word_count": template["target_word_count"],
+                }
+            )
+            continue
+        serialized.append(
+            {
+                "level_index": i,
+                "title": level.title,
+                "description": level.description,
+                "topics": list(level.topics or [])[:5],
+                "target_word_count": level.target_word_count or 50,
+            }
+        )
+    return {
+        "title": plan.title or f"{profile.target_language} learning path",
+        "levels": serialized,
+    }
+
+
+def generate_roadmap_for_profile(profile, placement_result=None):
+    """Ask Gemma for a 4-level plan and persist Roadmap + RoadmapLevel rows."""
+    try:
+        plan = _plan_from_gemma(profile, placement_result)
+    except Exception:
+        plan = _fallback_plan(profile)
+
+    # Replace any previous roadmap so get_roadmap_progress always sees the latest.
+    for old in Roadmap.query.all():
+        db.session.delete(old)
+    db.session.flush()
+
+    roadmap = Roadmap(title=plan["title"])
+    db.session.add(roadmap)
+    db.session.flush()
+
+    for i, level_data in enumerate(plan["levels"][:4], start=1):
+        db.session.add(
+            RoadmapLevel(
+                roadmap_id=roadmap.id,
+                level_index=level_data.get("level_index", i),
+                title=level_data["title"],
+                description=level_data.get("description", ""),
+                topics=level_data.get("topics") or [],
+                target_word_count=level_data.get("target_word_count") or 50,
+                status="active" if i == 1 else "locked",
+            )
+        )
+
+    db.session.commit()
+    return roadmap
+
+
+def check_level_completion():
+    """Mark active levels complete when topic mastery hits the target; unlock the next."""
+    roadmap = _load_saved_roadmap()
+    if not roadmap:
+        return None
+
+    levels = (
+        RoadmapLevel.query.filter_by(roadmap_id=roadmap.id)
+        .order_by(RoadmapLevel.level_index)
+        .all()
+    )
+    changed = False
+
+    for i, level in enumerate(levels):
+        if level.status != "active":
+            continue
+
+        target = level.target_word_count or 50
+        mastered = _mastered_count_for_topics(level.topics or [])
+        if mastered < target:
+            continue
+
+        level.status = "completed"
+        level.completed_at = datetime.utcnow()
+        changed = True
+
+        if i + 1 < len(levels) and levels[i + 1].status == "locked":
+            levels[i + 1].status = "active"
+
+    if changed:
+        db.session.commit()
+
+    return roadmap
