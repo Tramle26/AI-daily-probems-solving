@@ -28,11 +28,12 @@ def save_document(filename, text, language):
 
 
 def delete_document(doc):
-    from models import AskHistory, DictionarySearch, VocabularyItem
+    from models import AskHistory, DictionarySearch, DocumentChunk, VocabularyItem
 
     VocabularyItem.query.filter_by(document_id=doc.id).update({"document_id": None})
     DictionarySearch.query.filter_by(document_id=doc.id).update({"document_id": None})
     AskHistory.query.filter_by(document_id=doc.id).delete()
+    DocumentChunk.query.filter_by(document_id=doc.id).delete()
     db.session.delete(doc)
     db.session.commit()
 

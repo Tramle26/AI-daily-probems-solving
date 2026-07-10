@@ -1,10 +1,10 @@
 import os
 
-from flask import Blueprint, render_template, request, redirect, url_for, g, session
+from flask import Blueprint, render_template, request, redirect, url_for, g, session, current_app
 from google import genai
 
 from extensions import db
-from models import AskHistory, FlashcardDeck, UploadedDocument, VocabularyItem
+from models import AskHistory, DocumentChunk, FlashcardDeck, UploadedDocument, VocabularyItem
 from services.documents import (
     delete_document,
     extract_text_from_file,
@@ -127,6 +127,11 @@ def upload():
         if not text:
             return render_template("upload.html", languages=LANGUAGES, error="No text found.")
         doc = save_document(filename, text, language)
+        try:
+            from services.retrieval import index_document
+            index_document(doc.id, doc.raw_text)
+        except Exception as exc:
+            current_app.logger.warning("Embedding index failed: %s", exc)
         return redirect(url_for("main.upload_preview", doc_id=doc.id))
     return render_template("upload.html", languages=LANGUAGES)
 
@@ -188,7 +193,8 @@ def upload_excel():
 @bp.route("/upload/<int:doc_id>")
 def upload_preview(doc_id):
     doc = UploadedDocument.query.get_or_404(doc_id)
-    return render_template("upload_preview.html", doc=doc)
+    chunk_count = DocumentChunk.query.filter_by(document_id=doc.id).count()
+    return render_template("upload_preview.html", doc=doc, chunk_count=chunk_count)
 
 
 @bp.route("/upload/<int:doc_id>/remove", methods=["POST"])

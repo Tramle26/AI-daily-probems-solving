@@ -5,9 +5,8 @@ from google import genai
 
 from extensions import db
 from models import AskHistory, DictionarySearch, QuizSession, UploadedDocument, VocabularyItem
-from services.documents import keyword_search_chunks
 from services.gemma import (
-    ask_document,
+    ask_document_smart,
     dictionary_lookup,
     extract_document_vocabulary,
     extract_vocab_from_answer,
@@ -20,8 +19,9 @@ from services.quiz import (
     get_quiz_pool,
     grade_and_update_mastery,
 )
+from services.retrieval import index_document
 from services.review import mark_review_feedback
-from services.vocabulary import is_valid_vocab_word, save_deck, upsert_vocabulary
+from services.vocabulary import find_similar_vocab, is_valid_vocab_word, save_deck, upsert_vocabulary
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -106,10 +106,14 @@ def dictionary_search():
     target_language = profile.target_language
     native_language = profile.native_language
 
-    related = [
-        v.word
-        for v in VocabularyItem.query.filter_by(language=target_language).limit(10).all()
-    ]
+    embedding_neighbors = find_similar_vocab(word, target_language, top_k=5)
+    if embedding_neighbors:
+        related = [v.word for v in embedding_neighbors]
+    else:
+        related = [
+            v.word
+            for v in VocabularyItem.query.filter_by(language=target_language).limit(10).all()
+        ]
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -119,6 +123,10 @@ def dictionary_search():
     result = dictionary_lookup(
         client, word, lookup_language, target_language, native_language, related
     )
+
+    emb_words = [v.word for v in embedding_neighbors]
+    combined = list(dict.fromkeys(emb_words + result.similar_words))
+    result.similar_words = combined[:8]
 
     search = DictionarySearch(
         word=word, language=lookup_language, result_json=result.model_dump()
@@ -211,15 +219,13 @@ def api_ask():
         return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
 
     client = genai.Client(api_key=api_key)
-    snippets = keyword_search_chunks(doc.raw_text, data["question"])
-    context = "\n\n".join(snippets) if snippets else doc.raw_text[:8000]
-    answer = ask_document(client, context, data["question"], profile.native_language)
+    answer, sources = ask_document_smart(client, doc, data["question"], profile.native_language)
 
     entry = AskHistory(document_id=doc.id, question=data["question"], answer=answer)
     db.session.add(entry)
     db.session.commit()
 
-    return jsonify({"answer": answer, "ask_id": entry.id})
+    return jsonify({"answer": answer, "ask_id": entry.id, "sources": sources})
 
 
 @bp.post("/ask/<int:ask_id>/make-cards")
@@ -248,3 +254,27 @@ def ask_make_cards(ask_id):
         document_id=doc.id,
     )
     return jsonify({"deck_id": deck.id, "cards": cards})
+
+
+@bp.post("/documents/<int:doc_id>/index")
+def document_index(doc_id):
+    doc = UploadedDocument.query.get_or_404(doc_id)
+    reindex = request.json.get("reindex", False) if request.is_json else False
+    count = index_document(doc.id, doc.raw_text, reindex=reindex)
+    return jsonify({"chunks_indexed": count})
+
+
+@bp.post("/semantic-search")
+def semantic_search():
+    # RAG answer or vocabulary extraction mode — see original step 2b.6
+    ...
+
+
+@bp.get("/vocabulary/<int:vocab_id>/similar")
+def vocabulary_similar(vocab_id):
+    item = VocabularyItem.query.get_or_404(vocab_id)
+    similar = find_similar_vocab(item.word, item.language, top_k=8, exclude_word=item.word)
+    return jsonify({
+        "word": item.word,
+        "similar": [{"word": v.word, "meaning": v.meaning, "topic": v.topic} for v in similar],
+    })

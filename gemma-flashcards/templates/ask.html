@@ -24,6 +24,10 @@
       <div id="answerPanel" class="list-card" hidden style="margin-top: 16px;">
         <h2>Answer</h2>
         <p id="answerText"></p>
+        <details id="sourcesPanel" hidden style="margin-top: 8px;">
+          <summary class="muted">Sources used</summary>
+          <div id="sourcesList" class="section-grid" style="margin-top: 8px;"></div>
+        </details>
         <button type="button" id="makeCardsBtn" class="secondary" style="margin-top: 12px;">Make flashcards from this answer</button>
       </div>
 
@@ -86,6 +90,21 @@
     statusEl.textContent = ""
     answerPanel.hidden = false
     document.querySelector("#answerText").textContent = data.answer
+
+    const sourcesPanel = document.querySelector("#sourcesPanel")
+    const sourcesList = document.querySelector("#sourcesList")
+    if (data.sources && data.sources.length) {
+      sourcesList.innerHTML = data.sources.map((text, i) => `
+        <div class="list-card">
+          <strong>Chunk ${i + 1}</strong>
+          <p class="muted">${text.slice(0, 300)}${text.length > 300 ? "..." : ""}</p>
+        </div>
+      `).join("")
+      sourcesPanel.hidden = false
+    } else {
+      sourcesPanel.hidden = true
+      sourcesList.innerHTML = ""
+    }
   })
 
   document.querySelector("#makeCardsBtn")?.addEventListener("click", async () => {
