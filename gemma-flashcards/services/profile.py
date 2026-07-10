@@ -1,18 +1,28 @@
 # services/profile.py
-from extensions import db
-from models import UserProfile
 from datetime import date, timedelta
 
+from flask_login import current_user
+
+from extensions import db
+from models import UserProfile
+
+
 def get_profile():
-    """Return the single local user profile, creating one if needed."""
-    profile = UserProfile.query.first()
-    if not profile:
-        profile = UserProfile(target_language="French", native_language="English")
+    """Return the current user's profile, creating one if needed."""
+    if not current_user.is_authenticated:
+        return None
+
+    profile = current_user.profile
+    if profile is None:
+        profile = UserProfile(user_id=current_user.id)
         db.session.add(profile)
         db.session.commit()
     return profile
 
+
 def update_streak(profile):
+    if not profile:
+        return
     today = date.today()
     if profile.last_active_date == today:
         return

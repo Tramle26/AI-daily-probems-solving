@@ -2,6 +2,7 @@ from pypdf import PdfReader
 
 from extensions import db
 from models import UploadedDocument
+from services.ownership import current_user_id
 from services.vocabulary import is_valid_vocab_word
 
 
@@ -17,6 +18,7 @@ def extract_text_from_file(file_storage):
 
 def save_document(filename, text, language):
     doc = UploadedDocument(
+        user_id=current_user_id(),
         filename=filename,
         raw_text=text,
         language=language,
@@ -37,7 +39,10 @@ def delete_document(doc):
     db.session.delete(doc)
     db.session.commit()
 
+
 import openpyxl
+
+
 def keyword_search_chunks(text, query, context_chars=400):
     """Simple fallback until Phase 2b embeddings."""
     query_lower = query.lower()

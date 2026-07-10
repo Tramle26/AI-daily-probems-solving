@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 from extensions import db
 from models import VocabularyItem
+from services.ownership import get_owned_or_404, owned_query
 
 
 def sm2_update(item, quality: int):
@@ -17,7 +18,6 @@ def sm2_update(item, quality: int):
         item.mastery_status = (
             "mastered" if item.review_count >= 4 and quality >= 4 else "learning"
         )
-        # Slight ease bump on good recalls
         item.ease_factor = (item.ease_factor or 2.5) + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
         item.ease_factor = max(1.3, item.ease_factor)
     else:
@@ -33,7 +33,8 @@ def sm2_update(item, quality: int):
 def get_review_queue(limit=20):
     now = datetime.utcnow()
     return (
-        VocabularyItem.query.filter(
+        owned_query(VocabularyItem)
+        .filter(
             db.or_(
                 VocabularyItem.next_review_at.is_(None),
                 VocabularyItem.next_review_at <= now,
@@ -47,9 +48,7 @@ def get_review_queue(limit=20):
 
 
 def mark_review_feedback(vocab_id, got_it: bool):
-    item = VocabularyItem.query.get(vocab_id)
-    if not item:
-        return None
+    item = get_owned_or_404(VocabularyItem, vocab_id)
     sm2_update(item, 4 if got_it else 1)
     db.session.commit()
     return item

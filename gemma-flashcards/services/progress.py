@@ -6,6 +6,7 @@ from sqlalchemy import func
 
 from extensions import db
 from models import ProgressSnapshot, QuizSession, VocabularyItem
+from services.ownership import current_user_id, owned_query
 from services.roadmap import get_roadmap_progress
 
 RANGE_DAYS = {"week": 7, "month": 30, "year": 365}
@@ -33,6 +34,7 @@ def _words_by_day(start_dt: datetime, end_dt: datetime):
             func.count(VocabularyItem.id).label("count"),
         )
         .filter(
+            VocabularyItem.user_id == current_user_id(),
             VocabularyItem.first_seen_at >= start_dt,
             VocabularyItem.first_seen_at < end_dt + timedelta(days=1),
         )
@@ -44,10 +46,12 @@ def _words_by_day(start_dt: datetime, end_dt: datetime):
 
 def _activity_by_day(start_dt: datetime, end_dt: datetime):
     active = set()
+    uid = current_user_id()
 
     for row in (
         db.session.query(func.date(VocabularyItem.first_seen_at))
         .filter(
+            VocabularyItem.user_id == uid,
             VocabularyItem.first_seen_at >= start_dt,
             VocabularyItem.first_seen_at < end_dt + timedelta(days=1),
         )
@@ -61,6 +65,7 @@ def _activity_by_day(start_dt: datetime, end_dt: datetime):
     for row in (
         db.session.query(func.date(VocabularyItem.last_reviewed_at))
         .filter(
+            VocabularyItem.user_id == uid,
             VocabularyItem.last_reviewed_at.isnot(None),
             VocabularyItem.last_reviewed_at >= start_dt,
             VocabularyItem.last_reviewed_at < end_dt + timedelta(days=1),
@@ -75,6 +80,7 @@ def _activity_by_day(start_dt: datetime, end_dt: datetime):
     for row in (
         db.session.query(func.date(QuizSession.finished_at))
         .filter(
+            QuizSession.user_id == uid,
             QuizSession.finished_at.isnot(None),
             QuizSession.finished_at >= start_dt,
             QuizSession.finished_at < end_dt + timedelta(days=1),
@@ -156,11 +162,12 @@ def get_streak_roadmap(range_key: str = "week"):
 
 
 def get_mastery_breakdown():
+    base = owned_query(VocabularyItem)
     return {
-        "new": VocabularyItem.query.filter_by(mastery_status="new").count(),
-        "learning": VocabularyItem.query.filter_by(mastery_status="learning").count(),
-        "practice": VocabularyItem.query.filter_by(mastery_status="practice").count(),
-        "mastered": VocabularyItem.query.filter_by(mastery_status="mastered").count(),
+        "new": base.filter_by(mastery_status="new").count(),
+        "learning": owned_query(VocabularyItem).filter_by(mastery_status="learning").count(),
+        "practice": owned_query(VocabularyItem).filter_by(mastery_status="practice").count(),
+        "mastered": owned_query(VocabularyItem).filter_by(mastery_status="mastered").count(),
     }
 
 
@@ -175,17 +182,18 @@ def get_progress_charts(range_key: str = "week"):
 
 def upsert_daily_snapshot():
     today = date.today()
-    snap = ProgressSnapshot.query.filter_by(date=today).first()
+    uid = current_user_id()
+    snap = owned_query(ProgressSnapshot).filter_by(date=today).first()
     if not snap:
-        snap = ProgressSnapshot(date=today)
+        snap = ProgressSnapshot(user_id=uid, date=today)
         db.session.add(snap)
 
-    snap.words_learned = VocabularyItem.query.count()
-    snap.words_mastered = VocabularyItem.query.filter_by(mastery_status="mastered").count()
+    snap.words_learned = owned_query(VocabularyItem).count()
+    snap.words_mastered = owned_query(VocabularyItem).filter_by(mastery_status="mastered").count()
 
     start = datetime.combine(today, datetime.min.time())
     end = datetime.combine(today, datetime.max.time())
-    sessions = QuizSession.query.filter(
+    sessions = owned_query(QuizSession).filter(
         QuizSession.finished_at.isnot(None),
         QuizSession.finished_at >= start,
         QuizSession.finished_at <= end,
@@ -200,21 +208,20 @@ def upsert_daily_snapshot():
 
 
 def get_dashboard_summary(profile):
-    total = VocabularyItem.query.count()
-    mastered = VocabularyItem.query.filter_by(mastery_status="mastered").count()
-    practice = VocabularyItem.query.filter_by(mastery_status="practice").count()
+    total = owned_query(VocabularyItem).count()
+    mastered = owned_query(VocabularyItem).filter_by(mastery_status="mastered").count()
+    practice = owned_query(VocabularyItem).filter_by(mastery_status="practice").count()
 
     week_ago = datetime.utcnow() - timedelta(days=7)
-    sessions = QuizSession.query.filter(QuizSession.finished_at >= week_ago).all()
+    sessions = owned_query(QuizSession).filter(QuizSession.finished_at >= week_ago).all()
     if sessions and sum(s.total for s in sessions):
         accuracy = sum(s.score for s in sessions) / sum(s.total for s in sessions) * 100
     else:
         accuracy = 0.0
 
     study_words = (
-        VocabularyItem.query.filter(
-            VocabularyItem.mastery_status.in_(["new", "learning"])
-        )
+        owned_query(VocabularyItem)
+        .filter(VocabularyItem.mastery_status.in_(["new", "learning"]))
         .order_by(func.random())
         .limit(5)
         .all()

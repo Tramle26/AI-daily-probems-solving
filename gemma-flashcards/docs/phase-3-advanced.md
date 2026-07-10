@@ -24,7 +24,7 @@ Several Phase 3 items were partially built early. **Do not redo these** — exte
 | In scope (Phase 3) | Already done (skip) | Optional stretch |
 |--------------------|---------------------|------------------|
 | Placement test → estimated level | — | Forget-predictor ML |
-| Full learning roadmap (Gemma-generated) | Estimated roadmap on dashboard | Multi-user auth |
+| Full learning roadmap (Gemma-generated) | Estimated roadmap on dashboard | — (auth is Phase 4) |
 | Conversation practice with Gemma | — | Public article ingestion |
 | Weekly AI progress report | — | Export to Anki |
 | SM-2 spaced review scheduling | Basic 3-day review queue | |
@@ -486,7 +486,7 @@ Given what's already built, implement in this order:
 
 - Public article / social media source ingestion
 - Export decks (CSV / Anki)
-- Multi-user auth and cloud deploy
+- Cloud deploy (Postgres + gunicorn) — auth is [Phase 4](phase-4-auth.md)
 - Forget-predictor training pipeline
 - Embedding-enhanced topic detection for live background
 

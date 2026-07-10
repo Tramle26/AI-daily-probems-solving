@@ -4,7 +4,7 @@ import os
 from dotenv import load_dotenv
 from flask import Flask
 
-from extensions import db
+from extensions import db, login_manager
 
 load_dotenv()
 
@@ -19,15 +19,43 @@ def create_app():
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
     db.init_app(app)
+    login_manager.init_app(app)
+
+    @login_manager.user_loader
+    def load_user(user_id):
+        from models import User
+
+        return db.session.get(User, int(user_id))
+
+    @login_manager.unauthorized_handler
+    def unauthorized():
+        from flask import jsonify, redirect, request, url_for
+
+        if request.path.startswith("/api/") or request.path == "/stream":
+            return jsonify({"error": "Authentication required"}), 401
+        return redirect(url_for("auth.login", next=request.path))
 
     with app.app_context():
-        import models  # noqa: F401, register all models with SQLAlchemy
+        import models  # noqa: F401
         from models import VocabularyItem
         from sqlalchemy import inspect, text
 
+        # Phase 4: recreate DB if the multi-user schema is missing.
+        inspector = inspect(db.engine)
+        tables = set(inspector.get_table_names())
+        needs_reset = False
+        if "user" not in tables:
+            needs_reset = bool(tables)
+        elif "vocabulary_item" in tables:
+            cols = {col["name"] for col in inspector.get_columns("vocabulary_item")}
+            if "user_id" not in cols:
+                needs_reset = True
+
+        if needs_reset:
+            db.drop_all()
+
         db.create_all()
 
-        # SQLite create_all does not add columns to existing tables.
         inspector = inspect(db.engine)
         if "vocabulary_item" in inspector.get_table_names():
             existing = {col["name"] for col in inspector.get_columns("vocabulary_item")}
@@ -48,20 +76,23 @@ def create_app():
         )
         db.session.commit()
 
-    from routes import flashcards, main,api
+    from routes import api, auth, flashcards, main
     from models import MASTERY_STATUS_LABELS
 
     @app.context_processor
-    def inject_mastery_labels():
+    def inject_globals():
+        from flask_login import current_user
+
         from services.background import get_background_config
         from services.profile import get_profile
 
-        profile = get_profile()
+        profile = get_profile() if current_user.is_authenticated else None
         return {
             "mastery_labels": MASTERY_STATUS_LABELS,
             "background_config": get_background_config(profile),
         }
 
+    app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(flashcards.bp)
     app.register_blueprint(api.bp)

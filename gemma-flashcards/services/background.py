@@ -56,9 +56,20 @@ def get_topic_glyphs(category: str) -> list[str]:
 
 
 def get_active_topics(limit: int = 5) -> list[dict]:
+    from flask_login import current_user
+
+    from services.ownership import owned_query
+
+    if not current_user.is_authenticated:
+        return []
+
     rows = (
         db.session.query(VocabularyItem.topic, func.count(VocabularyItem.id).label("count"))
-        .filter(VocabularyItem.topic.isnot(None), VocabularyItem.topic != "")
+        .filter(
+            VocabularyItem.user_id == current_user.id,
+            VocabularyItem.topic.isnot(None),
+            VocabularyItem.topic != "",
+        )
         .group_by(VocabularyItem.topic)
         .order_by(func.count(VocabularyItem.id).desc())
         .limit(limit * 2)
@@ -87,7 +98,7 @@ def get_active_topics(limit: int = 5) -> list[dict]:
 
     if not topics:
         doc_topics = []
-        for doc in UploadedDocument.query.order_by(UploadedDocument.uploaded_at.desc()).limit(5):
+        for doc in owned_query(UploadedDocument).order_by(UploadedDocument.uploaded_at.desc()).limit(5):
             for raw in doc.detected_topics or []:
                 label = str(raw).strip()
                 if label:
@@ -108,7 +119,7 @@ def get_active_topics(limit: int = 5) -> list[dict]:
         try:
             from models import Roadmap, RoadmapLevel
 
-            roadmap = Roadmap.query.order_by(Roadmap.created_at.desc()).first()
+            roadmap = owned_query(Roadmap).order_by(Roadmap.created_at.desc()).first()
             if roadmap:
                 active = (
                     RoadmapLevel.query.filter_by(roadmap_id=roadmap.id, status="active")

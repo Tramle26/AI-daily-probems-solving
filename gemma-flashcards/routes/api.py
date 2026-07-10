@@ -1,6 +1,7 @@
 import os
 
 from flask import Blueprint, Response, jsonify, request, session, stream_with_context
+from flask_login import login_required
 from google import genai
 
 from extensions import db
@@ -23,11 +24,13 @@ from services.gemma import (
     sse,
     summarize_conversation,
 )
+from services.ownership import current_user_id, get_owned_or_404, owned_query
 from services.profile import get_profile
 from services.progress import generate_weekly_report, get_progress_charts, upsert_daily_snapshot
 from services.quiz import (
     build_fill_blank,
     build_multiple_choice,
+    create_quiz_session,
     get_quiz_pool,
     grade_and_update_mastery,
 )
@@ -46,12 +49,14 @@ bp = Blueprint("api", __name__, url_prefix="/api")
 
 
 @bp.get("/progress/charts")
+@login_required
 def progress_charts():
     range_key = request.args.get("range", "week")
     return jsonify(get_progress_charts(range_key))
 
 
 @bp.get("/progress/weekly-report")
+@login_required
 def weekly_report():
     force = request.args.get("refresh") == "1"
     cached = session.get("weekly_report")
@@ -70,6 +75,7 @@ def weekly_report():
 
 
 @bp.post("/decks")
+@login_required
 def create_deck():
     data = request.get_json()
     if not data or not data.get("cards"):
@@ -89,9 +95,10 @@ def create_deck():
 
 
 @bp.post("/documents/<int:doc_id>/generate")
+@login_required
 def generate_from_document(doc_id):
     data = request.get_json()
-    doc = UploadedDocument.query.get_or_404(doc_id)
+    doc = get_owned_or_404(UploadedDocument, doc_id)
     max_words = min(int(data.get("max_words", 10)), 20)
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -137,6 +144,7 @@ def generate_from_document(doc_id):
 
 
 @bp.post("/dictionary/search")
+@login_required
 def dictionary_search():
     data = request.get_json()
     word = data["word"].strip()
@@ -151,7 +159,7 @@ def dictionary_search():
     else:
         related = [
             v.word
-            for v in VocabularyItem.query.filter_by(language=target_language).limit(10).all()
+            for v in owned_query(VocabularyItem).filter_by(language=target_language).limit(10).all()
         ]
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -168,7 +176,10 @@ def dictionary_search():
     result.similar_words = combined[:8]
 
     search = DictionarySearch(
-        word=word, language=lookup_language, result_json=result.model_dump()
+        user_id=current_user_id(),
+        word=word,
+        language=lookup_language,
+        result_json=result.model_dump(),
     )
     db.session.add(search)
     db.session.commit()
@@ -180,6 +191,7 @@ def dictionary_search():
 
 
 @bp.post("/dictionary/add")
+@login_required
 def dictionary_add():
     data = request.get_json()
     upsert_vocabulary(
@@ -191,7 +203,7 @@ def dictionary_add():
         source_type="dictionary",
     )
     if data.get("search_id"):
-        search = DictionarySearch.query.get(data["search_id"])
+        search = owned_query(DictionarySearch).filter_by(id=data["search_id"]).first()
         if search:
             search.added_to_deck = True
     db.session.commit()
@@ -199,6 +211,7 @@ def dictionary_add():
 
 
 @bp.post("/quiz/start")
+@login_required
 def quiz_start():
     data = request.get_json()
     items = get_quiz_pool(data["source_type"], data.get("source_id"), data.get("limit", 10))
@@ -210,22 +223,22 @@ def quiz_start():
     if not questions:
         return jsonify({"error": "Could not build questions from vocabulary."}), 400
 
-    session = QuizSession(
+    quiz_session = create_quiz_session(
         source_type=data["source_type"],
-        source_id=data.get("source_id"),
         quiz_type=data["quiz_type"],
+        source_id=data.get("source_id"),
         total=len(questions),
     )
-    db.session.add(session)
     db.session.commit()
-    return jsonify({"session_id": session.id, "questions": questions})
+    return jsonify({"session_id": quiz_session.id, "questions": questions})
 
 
 @bp.post("/quiz/submit")
+@login_required
 def quiz_submit():
     data = request.get_json()
-    session = QuizSession.query.get_or_404(data["session_id"])
-    score, total = grade_and_update_mastery(session, data["answers"])
+    quiz_session = get_owned_or_404(QuizSession, data["session_id"])
+    score, total = grade_and_update_mastery(quiz_session, data["answers"])
     accuracy = round(score / total * 100) if total else 0
     upsert_daily_snapshot()
     check_level_completion()
@@ -233,6 +246,7 @@ def quiz_submit():
 
 
 @bp.post("/review/feedback")
+@login_required
 def review_feedback():
     data = request.get_json()
     item = mark_review_feedback(data["vocab_id"], data["got_it"])
@@ -245,21 +259,27 @@ def review_feedback():
 
 
 @bp.post("/review/mini-quiz")
+@login_required
 def review_mini_quiz():
     data = request.get_json()
-    session = QuizSession(source_type="review", quiz_type="multiple_choice")
-    db.session.add(session)
+    quiz_session = QuizSession(
+        user_id=current_user_id(),
+        source_type="review",
+        quiz_type="multiple_choice",
+    )
+    db.session.add(quiz_session)
     db.session.flush()
-    score, total = grade_and_update_mastery(session, data["answers"])
+    score, total = grade_and_update_mastery(quiz_session, data["answers"])
     upsert_daily_snapshot()
     check_level_completion()
     return jsonify({"score": score, "total": total})
 
 
 @bp.post("/ask")
+@login_required
 def api_ask():
     data = request.get_json()
-    doc = UploadedDocument.query.get_or_404(data["document_id"])
+    doc = get_owned_or_404(UploadedDocument, data["document_id"])
     profile = get_profile()
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -269,7 +289,12 @@ def api_ask():
     client = genai.Client(api_key=api_key)
     answer, sources = ask_document_smart(client, doc, data["question"], profile.native_language)
 
-    entry = AskHistory(document_id=doc.id, question=data["question"], answer=answer)
+    entry = AskHistory(
+        user_id=current_user_id(),
+        document_id=doc.id,
+        question=data["question"],
+        answer=answer,
+    )
     db.session.add(entry)
     db.session.commit()
 
@@ -277,8 +302,9 @@ def api_ask():
 
 
 @bp.post("/ask/<int:ask_id>/make-cards")
+@login_required
 def ask_make_cards(ask_id):
-    entry = AskHistory.query.get_or_404(ask_id)
+    entry = get_owned_or_404(AskHistory, ask_id)
     doc = entry.document
     profile = get_profile()
 
@@ -305,22 +331,25 @@ def ask_make_cards(ask_id):
 
 
 @bp.post("/documents/<int:doc_id>/index")
+@login_required
 def document_index(doc_id):
-    doc = UploadedDocument.query.get_or_404(doc_id)
+    doc = get_owned_or_404(UploadedDocument, doc_id)
     reindex = request.json.get("reindex", False) if request.is_json else False
     count = index_document(doc.id, doc.raw_text, reindex=reindex)
     return jsonify({"chunks_indexed": count})
 
 
 @bp.post("/semantic-search")
+@login_required
 def semantic_search():
     # RAG answer or vocabulary extraction mode — see original step 2b.6
     ...
 
 
 @bp.get("/vocabulary/<int:vocab_id>/similar")
+@login_required
 def vocabulary_similar(vocab_id):
-    item = VocabularyItem.query.get_or_404(vocab_id)
+    item = get_owned_or_404(VocabularyItem, vocab_id)
     similar = find_similar_vocab(item.word, item.language, top_k=8, exclude_word=item.word)
     return jsonify({
         "word": item.word,
@@ -328,6 +357,7 @@ def vocabulary_similar(vocab_id):
     })
 
 @bp.post("/conversation/start")
+@login_required
 def conversation_start():
     data = request.get_json() or {}
     profile = get_profile()
@@ -355,6 +385,7 @@ def conversation_start():
     )
 
     conv = ConversationSession(
+        user_id=current_user_id(),
         topic=topic,
         difficulty=difficulty,
         target_words=target_words,
@@ -424,13 +455,14 @@ def conversation_start():
 
 
 @bp.post("/conversation/<int:session_id>/message")
+@login_required
 def conversation_message(session_id):
     data = request.get_json() or {}
     user_text = (data.get("message") or "").strip()
     if not user_text:
         return jsonify({"error": "Message required"}), 400
 
-    conv = ConversationSession.query.get_or_404(session_id)
+    conv = get_owned_or_404(ConversationSession, session_id)
     if conv.finished_at:
         return jsonify({"error": "Conversation already finished"}), 400
 
@@ -503,10 +535,11 @@ def conversation_message(session_id):
 
 
 @bp.post("/conversation/<int:session_id>/finish")
+@login_required
 def conversation_finish(session_id):
     from datetime import datetime
 
-    conv = ConversationSession.query.get_or_404(session_id)
+    conv = get_owned_or_404(ConversationSession, session_id)
     if conv.finished_at:
         return jsonify(
             {
@@ -551,6 +584,7 @@ def conversation_finish(session_id):
 
 
 @bp.post("/embeddings/warmup")
+@login_required
 def embeddings_warmup():
     """Kick off embedding-model load without blocking the request."""
     import threading

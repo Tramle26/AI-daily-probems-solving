@@ -5,6 +5,7 @@ from google import genai
 
 from extensions import db
 from models import Roadmap, RoadmapLevel, VocabularyItem
+from services.ownership import current_user_id, owned_query
 
 DEFAULT_ROADMAP_LEVELS = [
     {
@@ -35,16 +36,14 @@ DEFAULT_ROADMAP_LEVELS = [
 
 
 def _load_saved_roadmap():
-    return Roadmap.query.order_by(Roadmap.created_at.desc()).first()
+    return owned_query(Roadmap).order_by(Roadmap.created_at.desc()).first()
 
 
 def _mastered_count_for_topics(topics):
+    base = owned_query(VocabularyItem).filter_by(mastery_status="mastered")
     if not topics:
-        return VocabularyItem.query.filter_by(mastery_status="mastered").count()
-    return VocabularyItem.query.filter(
-        VocabularyItem.mastery_status == "mastered",
-        VocabularyItem.topic.in_(topics),
-    ).count()
+        return base.count()
+    return base.filter(VocabularyItem.topic.in_(topics)).count()
 
 
 def _progress_from_roadmap(roadmap):
@@ -87,7 +86,7 @@ def _progress_from_roadmap(roadmap):
 
 
 def _estimated_progress(profile):
-    mastered = VocabularyItem.query.filter_by(mastery_status="mastered").count()
+    mastered = owned_query(VocabularyItem).filter_by(mastery_status="mastered").count()
     levels = []
     cumulative = 0
     current_index = 1
@@ -143,7 +142,6 @@ def get_roadmap_progress(profile):
 
 
 def _fallback_plan(profile):
-    """Static 4-level plan when Gemma is unavailable."""
     language = profile.target_language or "your language"
     return {
         "title": f"{language} learning path",
@@ -175,7 +173,6 @@ def _plan_from_gemma(profile, placement_result=None):
     for i, template in enumerate(DEFAULT_ROADMAP_LEVELS, start=1):
         level = by_index.get(i)
         if level is None and plan.levels:
-            # Model may return unordered levels without matching indexes.
             level = plan.levels[i - 1] if i <= len(plan.levels) else None
         if level is None:
             serialized.append(
@@ -210,12 +207,11 @@ def generate_roadmap_for_profile(profile, placement_result=None):
     except Exception:
         plan = _fallback_plan(profile)
 
-    # Replace any previous roadmap so get_roadmap_progress always sees the latest.
-    for old in Roadmap.query.all():
+    for old in owned_query(Roadmap).all():
         db.session.delete(old)
     db.session.flush()
 
-    roadmap = Roadmap(title=plan["title"])
+    roadmap = Roadmap(user_id=current_user_id(), title=plan["title"])
     db.session.add(roadmap)
     db.session.flush()
 

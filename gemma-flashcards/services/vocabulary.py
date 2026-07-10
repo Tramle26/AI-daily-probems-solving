@@ -3,6 +3,7 @@ import re
 from extensions import db
 from models import Flashcard, FlashcardDeck, VocabularyItem
 from services.embeddings import cosine_similarity, embed_text, is_model_loaded
+from services.ownership import current_user_id, owned_query
 
 _HAS_LETTER_RE = re.compile(r"[A-Za-z\u00C0-\u024F]", re.UNICODE)
 
@@ -21,18 +22,22 @@ def is_valid_vocab_word(word):
 def get_words_by_status(language, status):
     return [
         v.word
-        for v in VocabularyItem.query.filter_by(language=language, mastery_status=status).all()
+        for v in owned_query(VocabularyItem)
+        .filter_by(language=language, mastery_status=status)
+        .all()
     ]
 
 
 def upsert_vocabulary(word, language, meaning, example, topic, source_type, source_id=None, document_id=None):
-    item = VocabularyItem.query.filter_by(word=word, language=language).first()
+    user_id = current_user_id()
+    item = owned_query(VocabularyItem).filter_by(word=word, language=language).first()
     if item:
         item.meaning = meaning or item.meaning
         item.example = example or item.example
         item.topic = topic or item.topic
         return item
     item = VocabularyItem(
+        user_id=user_id,
         word=word,
         language=language,
         meaning=meaning,
@@ -49,6 +54,7 @@ def upsert_vocabulary(word, language, meaning, example, topic, source_type, sour
 
 def save_deck(title, language, source_type, cards, source_id=None, document_id=None):
     deck = FlashcardDeck(
+        user_id=current_user_id(),
         title=title,
         language=language,
         source_type=source_type,
@@ -91,9 +97,10 @@ def save_deck(title, language, source_type, cards, source_id=None, document_id=N
 
 def get_related_by_topic(theme, language, limit=15):
     """Find prior vocabulary whose topic overlaps the new theme (simple keyword match)."""
-    keyword = theme.split()[0].lower()  # e.g. "soccer" or "World"
+    keyword = theme.split()[0].lower()
     return (
-        VocabularyItem.query.filter_by(language=language)
+        owned_query(VocabularyItem)
+        .filter_by(language=language)
         .filter(VocabularyItem.topic.ilike(f"%{keyword}%"))
         .limit(limit)
         .all()
@@ -123,9 +130,12 @@ def find_similar_vocab(word, language, top_k=5, exclude_word=None):
     if not query_vec:
         return []
 
-    items = VocabularyItem.query.filter_by(language=language).filter(
-        VocabularyItem.embedding_blob.isnot(None)
-    ).all()
+    items = (
+        owned_query(VocabularyItem)
+        .filter_by(language=language)
+        .filter(VocabularyItem.embedding_blob.isnot(None))
+        .all()
+    )
 
     scored = []
     for item in items:

@@ -2,6 +2,7 @@
 import os
 
 from flask import Blueprint, Response, render_template, request, stream_with_context
+from flask_login import login_required
 from ollama import ResponseError
 from pydantic import ValidationError
 
@@ -21,12 +22,14 @@ bp = Blueprint("flashcards", __name__)
 
 
 @bp.get("/flashcards")
+@login_required
 def index():
     theme = request.args.get("theme", "").strip()
     return render_template("flashcards.html", theme=theme)
 
 
 @bp.get("/stream")
+@login_required
 def stream():
     language = request.args.get("language", "French").strip() or "French"
     theme = request.args.get("theme", "World Cup soccer").strip() or "World Cup soccer"

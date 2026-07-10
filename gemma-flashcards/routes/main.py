@@ -1,6 +1,7 @@
 import os
 
 from flask import Blueprint, render_template, request, redirect, url_for, g, session, current_app, jsonify
+from flask_login import current_user, login_required
 from google import genai
 
 from extensions import db
@@ -25,6 +26,7 @@ from services.gemma import (
     fill_missing_card_fields,
     generate_placement_questions,
 )
+from services.ownership import current_user_id, get_owned_or_404, owned_query
 from services.profile import get_profile, update_streak
 from services.review import get_review_queue
 from services.roadmap import generate_roadmap_for_profile, get_roadmap_progress
@@ -84,12 +86,19 @@ def map_estimated_level(raw: str) -> str:
 
 @bp.before_app_request
 def load_profile():
-    g.profile = get_profile()
+    if current_user.is_authenticated:
+        g.profile = get_profile()
+    else:
+        g.profile = None
 
 
 @bp.before_app_request
 def require_onboarding():
+    if not current_user.is_authenticated:
+        return
     if request.endpoint and request.endpoint.startswith("static"):
+        return
+    if request.endpoint and request.endpoint.startswith("auth."):
         return
     if request.endpoint in ("main.onboarding", "flashcards.stream", "main.placement"):
         return
@@ -99,16 +108,19 @@ def require_onboarding():
     ):
         return
     profile = get_profile()
-    if profile.goal is None and request.endpoint != "main.onboarding":
+    if profile and profile.goal is None and request.endpoint != "main.onboarding":
         return redirect(url_for("main.onboarding"))
 
 
 @bp.get("/")
 def home():
+    if not current_user.is_authenticated:
+        return redirect(url_for("auth.login"))
     return redirect(url_for("main.dashboard"))
 
 
 @bp.route("/onboarding", methods=["GET", "POST"])
+@login_required
 def onboarding():
     profile = get_profile()
     if request.method == "POST":
@@ -134,6 +146,7 @@ def onboarding():
 
 
 @bp.route("/settings", methods=["GET", "POST"])
+@login_required
 def settings():
     profile = get_profile()
     if request.method == "POST":
@@ -166,6 +179,7 @@ def settings():
 
 
 @bp.route("/dashboard")
+@login_required
 def dashboard():
     from services.progress import get_dashboard_summary, get_progress_charts
 
@@ -181,6 +195,7 @@ def dashboard():
 
 
 @bp.route("/upload", methods=["GET", "POST"])
+@login_required
 def upload():
     if request.method == "POST":
         language = request.form.get("language") or g.profile.target_language
@@ -201,6 +216,7 @@ def upload():
 
 
 @bp.route("/upload/excel", methods=["GET", "POST"])
+@login_required
 def upload_excel():
     profile = get_profile()
 
@@ -255,37 +271,42 @@ def upload_excel():
 
 
 @bp.route("/upload/<int:doc_id>")
+@login_required
 def upload_preview(doc_id):
-    doc = UploadedDocument.query.get_or_404(doc_id)
+    doc = get_owned_or_404(UploadedDocument, doc_id)
     chunk_count = DocumentChunk.query.filter_by(document_id=doc.id).count()
     return render_template("upload_preview.html", doc=doc, chunk_count=chunk_count)
 
 
 @bp.route("/upload/<int:doc_id>/remove", methods=["POST"])
+@login_required
 def upload_remove(doc_id):
-    doc = UploadedDocument.query.get_or_404(doc_id)
+    doc = get_owned_or_404(UploadedDocument, doc_id)
     delete_document(doc)
     return redirect(url_for("main.upload"))
 
 
 @bp.route("/quiz")
+@login_required
 def quiz():
-    decks = FlashcardDeck.query.order_by(FlashcardDeck.created_at.desc()).limit(20).all()
+    decks = owned_query(FlashcardDeck).order_by(FlashcardDeck.created_at.desc()).limit(20).all()
     return render_template("quiz.html", decks=decks)
 
 
 @bp.route("/dictionary")
+@login_required
 def dictionary():
     return render_template("dictionary.html", profile=g.profile)
 
 
 @bp.route("/library")
+@login_required
 def library():
     status = request.args.get("status")
     if status == "weak":
         status = "practice"
     search = request.args.get("q", "").strip()
-    query = VocabularyItem.query.order_by(VocabularyItem.first_seen_at.desc())
+    query = owned_query(VocabularyItem).order_by(VocabularyItem.first_seen_at.desc())
     if status:
         query = query.filter_by(mastery_status=status)
     if search:
@@ -301,29 +322,34 @@ def library():
 
 
 @bp.route("/history")
+@login_required
 def history_redirect():
     return redirect(url_for("main.library", **request.args))
 
 
 @bp.route("/review")
+@login_required
 def review():
     items = get_review_queue()
     return render_template("review.html", items=items)
 
 
 @bp.route("/ask", methods=["GET", "POST"])
+@login_required
 def ask():
-    docs = UploadedDocument.query.order_by(UploadedDocument.uploaded_at.desc()).all()
-    history = AskHistory.query.order_by(AskHistory.created_at.desc()).limit(20).all()
+    docs = owned_query(UploadedDocument).order_by(UploadedDocument.uploaded_at.desc()).all()
+    history = owned_query(AskHistory).order_by(AskHistory.created_at.desc()).limit(20).all()
     return render_template("ask.html", documents=docs, history=history)
 
 
 @bp.route("/placement")
+@login_required
 def placement():
     return render_template("placement.html", profile=g.profile)
 
 
 @bp.post("/api/placement/start")
+@login_required
 def placement_start():
     profile = get_profile()
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -362,6 +388,7 @@ def placement_start():
 
 
 @bp.post("/api/placement/submit")
+@login_required
 def placement_submit():
     profile = get_profile()
     data = request.get_json() or {}
@@ -399,6 +426,7 @@ def placement_submit():
     profile.level = mapped_level
 
     placement = PlacementSession(
+        user_id=current_user_id(),
         estimated_level=mapped_level,
         weak_areas=evaluation.weak_areas,
         strengths=evaluation.strengths,
@@ -426,14 +454,16 @@ def placement_submit():
 
 
 @bp.route("/roadmap")
+@login_required
 def roadmap_view():
     progress = get_roadmap_progress(g.profile)
     return render_template("roadmap.html", progress=progress, profile=g.profile)
 
 
 @bp.route("/conversation")
+@login_required
 def conversation():
-    items = VocabularyItem.query.order_by(VocabularyItem.first_seen_at.desc()).limit(30).all()
+    items = owned_query(VocabularyItem).order_by(VocabularyItem.first_seen_at.desc()).limit(30).all()
     progress = get_roadmap_progress(g.profile)
     default_topic = "daily life"
     for level in progress.get("levels") or []:

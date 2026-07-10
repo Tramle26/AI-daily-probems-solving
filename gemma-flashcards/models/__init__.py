@@ -1,46 +1,86 @@
-#models/__init__.py
-from datetime import datetime # import the datetime module
-from extensions import db # import the db instance from extensions.py
+# models/__init__.py
+from datetime import datetime
+
+from flask_login import UserMixin
+from werkzeug.security import check_password_hash, generate_password_hash
+
+from extensions import db
+
+
+class User(UserMixin, db.Model):
+    __tablename__ = "user"
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(256), nullable=False)
+    display_name = db.Column(db.String(64))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_active = db.Column(db.Boolean, default=True)
+
+    profile = db.relationship(
+        "UserProfile",
+        backref="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    def set_password(self, password: str) -> None:
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password: str) -> bool:
+        return check_password_hash(self.password_hash, password)
+
 
 class UserProfile(db.Model):
-    __tablename__ = 'user_profile'
-    id = db.Column(db.Integer, primary_key= True)
-    target_language= db.Column(db.String(32), nullable = False, default = "French")
-    native_language= db.Column(db.String(32), nullable = False, default = "English")
+    __tablename__ = "user_profile"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), unique=True, nullable=False)
+    target_language = db.Column(db.String(32), nullable=False, default="French")
+    native_language = db.Column(db.String(32), nullable=False, default="English")
     level = db.Column(db.String(16))
-    goal= db.Column(db.String(64))
-    streak_days= db.Column(db.Integer, default = 0)
-    last_active_date= db.Column(db.Date)
-    profile_created_at= db.Column(db.DateTime, default = datetime.utcnow)
+    goal = db.Column(db.String(64))
+    streak_days = db.Column(db.Integer, default=0)
+    last_active_date = db.Column(db.Date)
+    profile_created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 
 class UploadedDocument(db.Model):
-    __tablename__ = 'uploaded_document'
-    id= db.Column(db.Integer, primary_key = True)
-    filename= db.Column(db.String(256))
-    raw_text= db.Column(db.Text, nullable = False)
+    __tablename__ = "uploaded_document"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    filename = db.Column(db.String(256))
+    raw_text = db.Column(db.Text, nullable=False)
     language = db.Column(db.String(32))
-    detected_topics = db.Column(db.JSON, default= list)
-    word_count= db.Column(db.Integer, default =0)
-    uploaded_at= db.Column(db.DateTime, default = datetime.utcnow)
-    vocabulary_items= db.relationship("VocabularyItem", backref="document", lazy=True)
-    chunks = db.relationship("DocumentChunk",backref="document", lazy= True, cascade="all,delete-orphan")
+    detected_topics = db.Column(db.JSON, default=list)
+    word_count = db.Column(db.Integer, default=0)
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    vocabulary_items = db.relationship("VocabularyItem", backref="document", lazy=True)
+    chunks = db.relationship(
+        "DocumentChunk", backref="document", lazy=True, cascade="all, delete-orphan"
+    )
+
 
 class DocumentChunk(db.Model):
     __tablename__ = "document_chunk"
+
     id = db.Column(db.Integer, primary_key=True)
     document_id = db.Column(db.Integer, db.ForeignKey("uploaded_document.id"), nullable=False)
     chunk_index = db.Column(db.Integer, nullable=False)
     text = db.Column(db.Text, nullable=False)
-    embedding_blob = db.Column(db.JSON)  # list[float]; NULL until Phase 2b indexes document
+    embedding_blob = db.Column(db.JSON)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 
 class FlashcardDeck(db.Model):
     __tablename__ = "flashcard_deck"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
     title = db.Column(db.String(256), nullable=False)
     language = db.Column(db.String(32), nullable=False)
-    source_type = db.Column(db.String(32))   # topic, document, dictionary, excel
+    source_type = db.Column(db.String(32))
     source_id = db.Column(db.Integer)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -53,6 +93,7 @@ class VocabularyItem(db.Model):
     __tablename__ = "vocabulary_item"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
     word = db.Column(db.String(128), nullable=False)
     language = db.Column(db.String(32), nullable=False)
     meaning = db.Column(db.Text)
@@ -71,10 +112,10 @@ class VocabularyItem(db.Model):
     review_count = db.Column(db.Integer, default=0)
     quiz_accuracy = db.Column(db.Float, default=0.0)
     user_notes = db.Column(db.Text)
-    embedding_blob = db.Column(db.JSON)  # list[float]; NULL until Phase 2b embeds word+meaning
+    embedding_blob = db.Column(db.JSON)
 
     __table_args__ = (
-        db.UniqueConstraint("word", "language", name="uq_word_language"),
+        db.UniqueConstraint("user_id", "word", "language", name="uq_user_word_language"),
     )
 
 
@@ -104,6 +145,7 @@ class DictionarySearch(db.Model):
     __tablename__ = "dictionary_search"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
     word = db.Column(db.String(128), nullable=False)
     language = db.Column(db.String(32), nullable=False)
     result_json = db.Column(db.JSON)
@@ -116,6 +158,7 @@ class QuizSession(db.Model):
     __tablename__ = "quiz_session"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
     source_type = db.Column(db.String(32))
     source_id = db.Column(db.Integer)
     quiz_type = db.Column(db.String(32))
@@ -146,16 +189,23 @@ class ProgressSnapshot(db.Model):
     __tablename__ = "progress_snapshot"
 
     id = db.Column(db.Integer, primary_key=True)
-    date = db.Column(db.Date, nullable=False, unique=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    date = db.Column(db.Date, nullable=False)
     words_learned = db.Column(db.Integer, default=0)
     words_mastered = db.Column(db.Integer, default=0)
     quiz_accuracy = db.Column(db.Float, default=0.0)
     time_spent_minutes = db.Column(db.Integer, default=0)
 
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "date", name="uq_user_progress_date"),
+    )
+
+
 class AskHistory(db.Model):
     __tablename__ = "ask_history"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
     document_id = db.Column(db.Integer, db.ForeignKey("uploaded_document.id"))
     question = db.Column(db.Text, nullable=False)
     answer = db.Column(db.Text, nullable=False)
@@ -164,15 +214,18 @@ class AskHistory(db.Model):
 
     document = db.relationship("UploadedDocument", backref="questions")
 
+
 class Roadmap(db.Model):
     __tablename__ = "roadmap"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
     title = db.Column(db.String(128), default="My learning path")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     levels = db.relationship(
         "RoadmapLevel", backref="roadmap", lazy=True, cascade="all, delete-orphan"
     )
+
 
 class RoadmapLevel(db.Model):
     __tablename__ = "roadmap_level"
@@ -182,25 +235,29 @@ class RoadmapLevel(db.Model):
     level_index = db.Column(db.Integer, nullable=False)
     title = db.Column(db.String(128))
     description = db.Column(db.Text)
-    topics = db.Column(db.JSON, default=list)   # ["food", "travel", ...]
+    topics = db.Column(db.JSON, default=list)
     target_word_count = db.Column(db.Integer, default=50)
-    status = db.Column(db.String(16), default="locked")  # locked, active, completed
+    status = db.Column(db.String(16), default="locked")
     completed_at = db.Column(db.DateTime)
+
 
 class PlacementSession(db.Model):
     __tablename__ = "placement_session"
 
     id = db.Column(db.Integer, primary_key=True)
-    estimated_level = db.Column(db.String(8))   # A1–C1 or beginner/advanced
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    estimated_level = db.Column(db.String(8))
     weak_areas = db.Column(db.JSON, default=list)
     strengths = db.Column(db.JSON, default=list)
     raw_evaluation = db.Column(db.JSON)
     finished_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
 class ConversationSession(db.Model):
     __tablename__ = "conversation_session"
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
     topic = db.Column(db.String(128))
     difficulty = db.Column(db.String(16))
     target_words = db.Column(db.JSON, default=list)

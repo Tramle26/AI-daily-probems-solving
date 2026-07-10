@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Log in | Gemma Learning{% endblock %}
+{% block content %}
+<section class="panel auth-panel">
+  <h1>Log in</h1>
+  <p class="muted">Welcome back. Your vocabulary and progress stay private to your account.</p>
+
+  <form method="post" class="form-grid auth-form">
+    <label>Email
+      <input type="email" name="email" required autocomplete="email" />
+    </label>
+    <label>Password
+      <input type="password" name="password" required autocomplete="current-password" />
+    </label>
+    <label class="checkbox-row">
+      <input type="checkbox" name="remember" value="1" />
+      <span>Remember me</span>
+    </label>
+    <button type="submit" class="primary">Log in</button>
+  </form>
+
+  <p class="muted" style="margin-top: 16px;">
+    New here? <a href="{{ url_for('auth.signup') }}">Create an account</a>
+  </p>
+</section>
+{% endblock %}

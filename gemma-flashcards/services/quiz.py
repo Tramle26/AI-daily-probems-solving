@@ -2,27 +2,27 @@ import random
 from datetime import datetime
 
 from extensions import db
-from models import Flashcard, QuizAnswer, QuizSession, VocabularyItem
+from models import Flashcard, FlashcardDeck, QuizAnswer, QuizSession, VocabularyItem
+from services.ownership import current_user_id, get_owned_or_404, owned_query
 
 
 def get_quiz_pool(source_type, source_id=None, limit=10):
+    base = owned_query(VocabularyItem)
     if source_type in ("practice", "weak"):
-        items = VocabularyItem.query.filter_by(mastery_status="practice").all()
+        items = base.filter_by(mastery_status="practice").all()
     elif source_type == "deck" and source_id:
+        deck = get_owned_or_404(FlashcardDeck, source_id)
         items = (
-            VocabularyItem.query.join(Flashcard)
-            .filter(Flashcard.deck_id == source_id)
+            owned_query(VocabularyItem)
+            .join(Flashcard)
+            .filter(Flashcard.deck_id == deck.id)
             .all()
         )
     elif source_type == "today":
         today = datetime.utcnow().date()
-        items = VocabularyItem.query.filter(
-            db.func.date(VocabularyItem.first_seen_at) == today
-        ).all()
+        items = base.filter(db.func.date(VocabularyItem.first_seen_at) == today).all()
     else:
-        items = VocabularyItem.query.filter(
-            VocabularyItem.mastery_status != "mastered"
-        ).limit(limit).all()
+        items = base.filter(VocabularyItem.mastery_status != "mastered").limit(limit).all()
     return items[:limit]
 
 
@@ -65,7 +65,7 @@ def build_fill_blank(items):
 def grade_and_update_mastery(session, answers):
     score = 0
     for answer in answers:
-        item = VocabularyItem.query.get(answer["vocab_id"])
+        item = owned_query(VocabularyItem).filter_by(id=answer["vocab_id"]).first()
         if not item:
             continue
         user = answer.get("user_answer", "").strip().lower()
@@ -94,3 +94,15 @@ def grade_and_update_mastery(session, answers):
     session.finished_at = datetime.utcnow()
     db.session.commit()
     return score, len(answers)
+
+
+def create_quiz_session(source_type, quiz_type, source_id=None, total=0):
+    session = QuizSession(
+        user_id=current_user_id(),
+        source_type=source_type,
+        source_id=source_id,
+        quiz_type=quiz_type,
+        total=total,
+    )
+    db.session.add(session)
+    return session

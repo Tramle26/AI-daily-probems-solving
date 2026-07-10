@@ -31,14 +31,16 @@ Phase 3 docs list “Multi-user auth” as post-competition stretch. **Phase 4 i
 
 ## Exit criteria
 
-- [ ] New user can **sign up** with email + password
-- [ ] Existing user can **log in** and **log out**
-- [ ] Wrong password shows a clear error; duplicate email blocked on sign up
-- [ ] After login, user sees **only their** vocabulary, decks, uploads, quiz history
-- [ ] Onboarding runs **once per user** after first login
-- [ ] Unauthenticated visit to `/dashboard` redirects to `/login`
-- [ ] `/flashcards/stream` and API routes require login (or return 401)
-- [ ] Old single-user data can be migrated OR app starts fresh (document your choice)
+- [x] New user can **sign up** with email + password
+- [x] Existing user can **log in** and **log out**
+- [x] Wrong password shows a clear error; duplicate email blocked on sign up
+- [x] After login, user sees **only their** vocabulary, decks, uploads, quiz history
+- [x] Onboarding runs **once per user** after first login
+- [x] Unauthenticated visit to `/dashboard` redirects to `/login`
+- [x] `/flashcards/stream` and API routes require login (or return 401)
+- [x] Old single-user data can be migrated OR app starts fresh (document your choice)
+
+**Migration choice:** Option A — on startup, if the multi-user schema is missing (`user` table or `user_id` columns), the app drops and recreates the SQLite database. Existing single-user demo data is not preserved.
 
 ---
 
@@ -588,17 +590,17 @@ if (response.status === 401) {
 
 ## File checklist
 
-- [ ] `pyproject.toml` — add `flask-login`
-- [ ] `models/__init__.py` — `User` model; `user_id` on owned tables
-- [ ] `extensions.py` — `LoginManager`
-- [ ] `app.py` — init login manager, register auth blueprint
-- [ ] `routes/auth.py` — signup, login, logout
-- [ ] `templates/login.html`, `templates/signup.html`
-- [ ] `templates/base.html` — auth links / user menu
-- [ ] `services/profile.py` — per-user `get_profile()`
-- [ ] All routes/services — `@login_required` + `user_id` filters
-- [ ] Migration script or documented fresh-DB steps
-- [ ] Update Phase 3 doc cross-reference: move “Multi-user auth” from post-competition to Phase 4
+- [x] `pyproject.toml` — add `flask-login`
+- [x] `models/__init__.py` — `User` model; `user_id` on owned tables
+- [x] `extensions.py` — `LoginManager`
+- [x] `app.py` — init login manager, register auth blueprint
+- [x] `routes/auth.py` — signup, login, logout
+- [x] `templates/login.html`, `templates/signup.html`
+- [x] `templates/base.html` — auth links / user menu
+- [x] `services/profile.py` — per-user `get_profile()`
+- [x] All routes/services — `@login_required` + `user_id` filters
+- [x] Migration script or documented fresh-DB steps
+- [x] Update Phase 3 doc cross-reference: move “Multi-user auth” from post-competition to Phase 4
 
 ---
 
