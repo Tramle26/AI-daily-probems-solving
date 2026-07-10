@@ -10,6 +10,8 @@ from services.gemma import FlashcardSchema, card_stream, clean_count, sse
 from services.profile import get_profile
 from services.vocabulary import (
     build_continuity_context,
+    build_embedding_continuity_context,
+    embed_vocabulary_item,
     get_words_by_status,
     is_valid_vocab_word,
     upsert_vocabulary,
@@ -35,7 +37,9 @@ def stream():
         try:
             profile = get_profile()
             exclude = get_words_by_status(language, "mastered")
-            continuity = build_continuity_context(theme, language)
+            continuity = build_embedding_continuity_context(theme, language)
+            if not continuity:
+                continuity = build_continuity_context(theme, language)
 
             emitted = 0
             for card_data in card_stream(
@@ -62,6 +66,10 @@ def stream():
                     topic=card.topic or theme,
                     source_type="topic",
                 )
+                try:
+                    embed_vocabulary_item(vocab)
+                except Exception:
+                    pass  # never block flashcard streaming on a slow/broken embedding model
                 db.session.commit()
 
                 emitted += 1
