@@ -28,6 +28,20 @@ def get_words_by_status(language, status):
     ]
 
 
+def list_library_topics():
+    """Distinct non-empty topic tags from the user's vocabulary library."""
+    rows = (
+        owned_query(VocabularyItem)
+        .with_entities(VocabularyItem.topic)
+        .filter(VocabularyItem.topic.isnot(None))
+        .filter(VocabularyItem.topic != "")
+        .distinct()
+        .order_by(VocabularyItem.topic.asc())
+        .all()
+    )
+    return [row[0].strip() for row in rows if row[0] and row[0].strip()]
+
+
 def upsert_vocabulary(word, language, meaning, example, topic, source_type, source_id=None, document_id=None):
     user_id = current_user_id()
     item = owned_query(VocabularyItem).filter_by(word=word, language=language).first()
@@ -185,6 +199,9 @@ def related_words_for_conversation(topic, language, target_words, limit=8):
 
 
 def build_embedding_continuity_context(theme, language, top_k=10):
+    # Skip when cold — loading SentenceTransformer can stall generation for 10–30s.
+    if not is_model_loaded():
+        return ""
     neighbors = find_similar_vocab(theme, language, top_k=top_k, exclude_word=theme)
     if not neighbors:
         return ""

@@ -6,8 +6,12 @@ from models import Flashcard, FlashcardDeck, QuizAnswer, QuizSession, Vocabulary
 from services.ownership import current_user_id, get_owned_or_404, owned_query
 
 
-def get_quiz_pool(source_type, source_id=None, limit=10):
+def get_quiz_pool(source_type, source_id=None, limit=10, topic=None):
     base = owned_query(VocabularyItem)
+    topic = (topic or "").strip()
+    if topic:
+        base = base.filter(VocabularyItem.topic.ilike(topic))
+
     if source_type in ("practice", "weak"):
         items = base.filter_by(mastery_status="practice").all()
     elif source_type == "deck" and source_id:
@@ -18,9 +22,13 @@ def get_quiz_pool(source_type, source_id=None, limit=10):
             .filter(Flashcard.deck_id == deck.id)
             .all()
         )
+        if topic:
+            items = [item for item in items if (item.topic or "").lower() == topic.lower()]
     elif source_type == "today":
         today = datetime.utcnow().date()
         items = base.filter(db.func.date(VocabularyItem.first_seen_at) == today).all()
+    elif source_type == "new":
+        items = base.filter_by(mastery_status="new").all()
     else:
         items = base.filter(VocabularyItem.mastery_status != "mastered").limit(limit).all()
     return items[:limit]

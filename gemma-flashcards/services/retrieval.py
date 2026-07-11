@@ -56,3 +56,28 @@ def search_chunks(document_id: int, question: str, top_k: int = 5) -> list[dict]
 
 def search_chunks_text(document_id: int, question: str, top_k: int = 5) -> list[str]:
     return [hit["text"] for hit in search_chunks(document_id, question, top_k)]
+
+
+def sample_document_chunks(document_id: int, top_k: int = 6) -> list[str]:
+    """Pick evenly spaced chunks so follow-up questions cover the whole document."""
+    chunks = (
+        DocumentChunk.query.filter_by(document_id=document_id)
+        .order_by(DocumentChunk.chunk_index.asc())
+        .all()
+    )
+    if not chunks:
+        return []
+    if len(chunks) <= top_k:
+        return [chunk.text for chunk in chunks]
+
+    step = len(chunks) / top_k
+    selected = [chunks[min(int(i * step), len(chunks) - 1)] for i in range(top_k)]
+    return [chunk.text for chunk in selected]
+
+
+def retrieve_for_followup(document_id: int, user_message: str, top_k: int = 5) -> list[str]:
+    """PyTorch semantic retrieval for the user's message; fall back to document samples."""
+    hits = search_chunks_text(document_id, user_message, top_k=top_k)
+    if hits:
+        return hits
+    return sample_document_chunks(document_id, top_k=top_k)

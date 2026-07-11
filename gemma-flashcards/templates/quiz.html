@@ -8,16 +8,15 @@
   <div id="setup" class="form-grid">
     <label>Source
       <select id="sourceType">
-        <option value="practice">Words to practice</option>
-        <option value="all">All non-mastered</option>
         <option value="today">Today's words</option>
-        <option value="deck">Saved deck</option>
+        <option value="new">All new words</option>
       </select>
     </label>
-    <label id="deckLabel" hidden>Deck
-      <select id="deckId">
-        {% for deck in decks %}
-        <option value="{{ deck.id }}">{{ deck.title }}</option>
+    <label>Topics
+      <select id="topic">
+        <option value="">All topics</option>
+        {% for topic in topics %}
+        <option value="{{ topic }}">{{ topic }}</option>
         {% endfor %}
       </select>
     </label>
@@ -55,11 +54,7 @@
   let answers = []
 
   const sourceType = document.querySelector("#sourceType")
-  const deckLabel = document.querySelector("#deckLabel")
-
-  sourceType.addEventListener("change", () => {
-    deckLabel.hidden = sourceType.value !== "deck"
-  })
+  const topicSelect = document.querySelector("#topic")
 
   document.querySelector("#startBtn").addEventListener("click", async () => {
     const statusEl = document.querySelector("#status")
@@ -70,8 +65,8 @@
       quiz_type: document.querySelector("#quizType").value,
       limit: Number(document.querySelector("#limit").value),
     }
-    if (payload.source_type === "deck") {
-      payload.source_id = Number(document.querySelector("#deckId").value)
+    if (topicSelect.value) {
+      payload.topic = topicSelect.value
     }
 
     const res = await fetch("/api/quiz/start", {

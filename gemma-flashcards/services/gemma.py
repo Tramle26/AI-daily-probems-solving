@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from models import DocumentChunk
 from services.documents import keyword_search_chunks
-from services.retrieval import search_chunks_text
+from services.retrieval import retrieve_for_followup, sample_document_chunks, search_chunks_text
 
 GOOGLE_MODEL = "gemma-4-26b-a4b-it"
 LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "gemma3:4b")
@@ -85,18 +85,18 @@ Theme: {theme}
 {exclude}
 {continuity_context}
 
-Each flashcard has:
-- front: a short word or phrase in {language}
-- back: the meaning plus a tiny, friendly learning note
-- example: a short example sentence that fits the theme
-- topic: a topic tag
+Keep every field SHORT so the deck streams quickly:
+- front: 1–3 words in {language}
+- back: meaning in {native_language} (max ~12 words)
+- example: one short sentence (max ~10 words)
+- topic: one word
 - difficulty: beginner, intermediate, or advanced
-- memory_tip: a short mnemonic (optional)
+- memory_tip: leave empty or one short phrase
 
 Rules:
 - front must be a real word or short phrase in {language}, never punctuation or symbols alone.
 - Do not repeat cards.
-- Order the deck from easier to harder.
+- Prefer common, useful words. Do not pad with long explanations.
 """
 
 
@@ -370,6 +370,90 @@ def ask_document_smart(client, doc, question, native_language):
         config=types.GenerateContentConfig(temperature=0.3),
     )
     return response.text, sources
+
+
+class DocumentFollowUps(BaseModel):
+    opening: str = Field(description="Short friendly greeting that references the document.")
+    questions: list[str] = Field(description="3–5 follow-up study questions about the document.")
+
+
+class DocumentAssistantTurn(BaseModel):
+    reply: str = Field(description="Answer grounded in the document excerpts.")
+    follow_up: str = Field(description="One short follow-up question to keep studying.")
+
+
+def generate_document_followups(client, chunk_texts, language, native_language, filename=""):
+    """Use sampled document chunks to propose follow-up study questions."""
+    context = "\n\n---\n\n".join(chunk_texts) if chunk_texts else "(no indexed excerpts)"
+    prompt = f"""
+You are a language-learning study coach for a document titled "{filename or 'uploaded file'}".
+The learner is studying {language}. Write the opening and questions in {native_language}.
+
+Using ONLY the excerpts below, greet the learner briefly and propose 3–5 follow-up questions
+that help them understand vocabulary, key ideas, and useful phrases from this document.
+Questions should be concrete and answerable from the excerpts.
+
+Excerpts:
+{context}
+"""
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.5,
+            response_mime_type="application/json",
+            response_schema=DocumentFollowUps,
+        ),
+    )
+    return parse_model_json(response.text, DocumentFollowUps)
+
+
+def document_assistant_reply(
+    client,
+    doc,
+    user_message,
+    messages,
+    language,
+    native_language,
+):
+    """Answer with PyTorch RAG context, then ask one follow-up question."""
+    chunks = retrieve_for_followup(doc.id, user_message, top_k=5)
+    if not chunks:
+        snippets = keyword_search_chunks(doc.raw_text, user_message)
+        chunks = snippets or [doc.raw_text[:4000]]
+
+    context = "\n\n---\n\n".join(chunks)
+    history = "\n".join(
+        f"{m.get('role', 'user').upper()}: {m.get('content', '')}"
+        for m in (messages or [])[-6:]
+    )
+    prompt = f"""
+You are a study assistant for an uploaded {language} learning document.
+Answer in {native_language} when explaining; keep short target-language quotes when useful.
+
+Use ONLY the excerpts below. If the answer is not supported, say so.
+After answering, ask exactly one short follow-up question that digs deeper into the document.
+
+Recent chat:
+{history or "(none)"}
+
+Excerpts:
+{context}
+
+Learner message: {user_message}
+"""
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.4,
+            response_mime_type="application/json",
+            response_schema=DocumentAssistantTurn,
+        ),
+    )
+    turn = parse_model_json(response.text, DocumentAssistantTurn)
+    return turn, chunks
+
 
 class AskVocabSuggestion(BaseModel):
     words: list[VocabularyEntry]

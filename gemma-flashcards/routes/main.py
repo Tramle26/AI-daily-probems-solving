@@ -8,7 +8,6 @@ from extensions import db
 from models import (
     AskHistory,
     DocumentChunk,
-    FlashcardDeck,
     PlacementSession,
     UploadedDocument,
     VocabularyItem,
@@ -30,7 +29,7 @@ from services.ownership import current_user_id, get_owned_or_404, owned_query
 from services.profile import get_profile, update_streak
 from services.review import get_review_queue
 from services.roadmap import generate_roadmap_for_profile, get_roadmap_progress
-from services.vocabulary import save_deck
+from services.vocabulary import list_library_topics, save_deck
 
 bp = Blueprint("main", __name__)
 
@@ -289,8 +288,7 @@ def upload_remove(doc_id):
 @bp.route("/quiz")
 @login_required
 def quiz():
-    decks = owned_query(FlashcardDeck).order_by(FlashcardDeck.created_at.desc()).limit(20).all()
-    return render_template("quiz.html", decks=decks)
+    return render_template("quiz.html", topics=list_library_topics())
 
 
 @bp.route("/dictionary")

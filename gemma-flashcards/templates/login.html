@@ -10,7 +10,10 @@
       <input type="email" name="email" required autocomplete="email" />
     </label>
     <label>Password
-      <input type="password" name="password" required autocomplete="current-password" />
+      <span class="password-field">
+        <input type="password" name="password" required autocomplete="current-password" />
+        <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">Show</button>
+      </span>
     </label>
     <label class="checkbox-row">
       <input type="checkbox" name="remember" value="1" />

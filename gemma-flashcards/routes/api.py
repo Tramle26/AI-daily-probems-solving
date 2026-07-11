@@ -19,8 +19,10 @@ from services.gemma import (
     conversation_reply,
     conversation_reply_stream,
     dictionary_lookup,
+    document_assistant_reply,
     extract_document_vocabulary,
     extract_vocab_from_answer,
+    generate_document_followups,
     sse,
     summarize_conversation,
 )
@@ -34,7 +36,7 @@ from services.quiz import (
     get_quiz_pool,
     grade_and_update_mastery,
 )
-from services.retrieval import index_document
+from services.retrieval import index_document, sample_document_chunks
 from services.review import mark_review_feedback
 from services.roadmap import check_level_completion
 from services.vocabulary import (
@@ -129,18 +131,34 @@ def generate_from_document(doc_id):
         if is_valid_vocab_word(item.word)
     ]
 
+    language = doc.language or data.get("language", "English")
+    for card in cards:
+        upsert_vocabulary(
+            word=card["front"],
+            language=language,
+            meaning=card["back"],
+            example=card.get("example", ""),
+            topic=card.get("topic", ""),
+            source_type="document",
+            source_id=doc.id,
+            document_id=doc.id,
+        )
+    db.session.commit()
+    upsert_daily_snapshot()
+    check_level_completion()
+
     if data.get("save", False):
         deck = save_deck(
             title=doc.filename or "Document deck",
-            language=doc.language,
+            language=language,
             source_type="document",
             cards=cards,
             source_id=doc.id,
             document_id=doc.id,
         )
-        return jsonify({"cards": cards, "deck_id": deck.id})
+        return jsonify({"cards": cards, "deck_id": deck.id, "saved_to_library": True})
 
-    return jsonify({"cards": cards})
+    return jsonify({"cards": cards, "saved_to_library": True})
 
 
 @bp.post("/dictionary/search")
@@ -214,7 +232,12 @@ def dictionary_add():
 @login_required
 def quiz_start():
     data = request.get_json()
-    items = get_quiz_pool(data["source_type"], data.get("source_id"), data.get("limit", 10))
+    items = get_quiz_pool(
+        data["source_type"],
+        data.get("source_id"),
+        data.get("limit", 10),
+        topic=data.get("topic"),
+    )
     if not items:
         return jsonify({"error": "No vocabulary available for this quiz source."}), 400
 
@@ -339,12 +362,103 @@ def document_index(doc_id):
     return jsonify({"chunks_indexed": count})
 
 
+@bp.post("/documents/<int:doc_id>/assistant/start")
+@login_required
+def document_assistant_start(doc_id):
+    """Index with PyTorch embeddings if needed, then propose follow-up questions."""
+    doc = get_owned_or_404(UploadedDocument, doc_id)
+    profile = get_profile()
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    try:
+        chunks_indexed = index_document(doc.id, doc.raw_text)
+    except Exception as exc:
+        return jsonify({"error": f"Could not index document with embeddings: {exc}"}), 500
+
+    excerpts = sample_document_chunks(doc.id, top_k=6)
+    if not excerpts:
+        excerpts = [doc.raw_text[:4000]]
+
+    client = genai.Client(api_key=api_key)
+    try:
+        followups = generate_document_followups(
+            client,
+            excerpts,
+            language=doc.language or profile.target_language,
+            native_language=profile.native_language,
+            filename=doc.filename or "",
+        )
+    except Exception as exc:
+        return jsonify({"error": f"Assistant failed: {exc}"}), 500
+
+    return jsonify({
+        "opening": followups.opening,
+        "questions": followups.questions,
+        "chunks_indexed": chunks_indexed,
+    })
+
+
+@bp.post("/documents/<int:doc_id>/assistant/chat")
+@login_required
+def document_assistant_chat(doc_id):
+    """Answer a learner message with PyTorch RAG and ask a follow-up question."""
+    doc = get_owned_or_404(UploadedDocument, doc_id)
+    profile = get_profile()
+    data = request.get_json() or {}
+    user_message = (data.get("message") or "").strip()
+    messages = data.get("messages") or []
+
+    if not user_message:
+        return jsonify({"error": "Enter a message."}), 400
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    # Ensure embeddings exist so retrieval can use PyTorch vectors.
+    try:
+        index_document(doc.id, doc.raw_text)
+    except Exception:
+        pass
+
+    client = genai.Client(api_key=api_key)
+    try:
+        turn, sources = document_assistant_reply(
+            client,
+            doc,
+            user_message=user_message,
+            messages=messages,
+            language=doc.language or profile.target_language,
+            native_language=profile.native_language,
+        )
+    except Exception as exc:
+        return jsonify({"error": f"Assistant failed: {exc}"}), 500
+
+    entry = AskHistory(
+        user_id=current_user_id(),
+        document_id=doc.id,
+        question=user_message,
+        answer=f"{turn.reply}\n\nFollow-up: {turn.follow_up}",
+    )
+    db.session.add(entry)
+    db.session.commit()
+
+    return jsonify({
+        "reply": turn.reply,
+        "follow_up": turn.follow_up,
+        "sources": sources,
+        "ask_id": entry.id,
+    })
+
+
 @bp.post("/semantic-search")
 @login_required
 def semantic_search():
     # RAG answer or vocabulary extraction mode — see original step 2b.6
     ...
-
 
 @bp.get("/vocabulary/<int:vocab_id>/similar")
 @login_required

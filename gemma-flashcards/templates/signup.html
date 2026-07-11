@@ -13,10 +13,16 @@
       <input type="email" name="email" required autocomplete="email" />
     </label>
     <label>Password
-      <input type="password" name="password" required minlength="8" autocomplete="new-password" />
+      <span class="password-field">
+        <input type="password" name="password" required minlength="8" autocomplete="new-password" />
+        <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">Show</button>
+      </span>
     </label>
     <label>Confirm password
-      <input type="password" name="confirm_password" required minlength="8" autocomplete="new-password" />
+      <span class="password-field">
+        <input type="password" name="confirm_password" required minlength="8" autocomplete="new-password" />
+        <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">Show</button>
+      </span>
     </label>
     <button type="submit" class="primary">Sign up</button>
   </form>

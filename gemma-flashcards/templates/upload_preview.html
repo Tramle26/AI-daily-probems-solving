@@ -29,15 +29,34 @@
     <label>Max words to extract
       <input type="number" id="maxWords" min="1" max="20" value="8" />
     </label>
-    <label>
-      <input type="checkbox" id="saveDeck" checked />
-      Save deck after generating
-    </label>
     <button type="button" id="generateBtn" class="primary">Generate flashcards</button>
   </div>
 
   <p id="status" class="muted" style="margin-top: 16px;"></p>
   <div id="cards" class="section-grid" style="margin-top: 16px;"></div>
+
+  <div class="list-card" style="margin-top: 24px;">
+    <div class="panel-header" style="margin-bottom: 8px;">
+      <div>
+        <h2>AI study assistant</h2>
+        <p class="muted">Gemma asks follow-up questions from this file. Answers use PyTorch semantic search over indexed chunks.</p>
+      </div>
+      <button type="button" id="startAssistantBtn" class="primary">Start assistant</button>
+    </div>
+
+    <div id="assistantSuggestions" class="filters" style="display:none; margin: 12px 0;"></div>
+    <div id="assistantChat" class="chat-log" aria-live="polite"></div>
+    <form id="assistantForm" class="chat-compose" hidden>
+      <input
+        type="text"
+        id="assistantInput"
+        placeholder="Answer or ask about this document…"
+        autocomplete="off"
+      />
+      <button type="submit" class="primary" id="assistantSendBtn">Send</button>
+    </form>
+    <p id="assistantStatus" class="muted chat-meta"></p>
+  </div>
 </section>
 
 <script>
@@ -90,7 +109,7 @@
           max_words: Number(document.querySelector("#maxWords").value),
           language: "{{ doc.language or 'French' }}",
           native_language: "English",
-          save: document.querySelector("#saveDeck").checked,
+          save: false,
         }),
       })
 
@@ -101,9 +120,7 @@
         return
       }
 
-      statusEl.textContent = data.deck_id
-        ? `Generated ${data.cards.length} cards and saved deck #${data.deck_id}.`
-        : `Generated ${data.cards.length} cards.`
+      statusEl.textContent = `Generated ${data.cards.length} cards and saved to library.`
 
       cardsEl.innerHTML = data.cards.map((card) => `
         <div class="list-card">
@@ -120,6 +137,129 @@
       clearTimeout(timeout)
       generateBtn.disabled = false
     }
+  })
+
+  const startAssistantBtn = document.querySelector("#startAssistantBtn")
+  const assistantChat = document.querySelector("#assistantChat")
+  const assistantForm = document.querySelector("#assistantForm")
+  const assistantInput = document.querySelector("#assistantInput")
+  const assistantSendBtn = document.querySelector("#assistantSendBtn")
+  const assistantStatus = document.querySelector("#assistantStatus")
+  const assistantSuggestions = document.querySelector("#assistantSuggestions")
+  const messages = []
+
+  function escapeHtml(text) {
+    return String(text)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+  }
+
+  function appendBubble(role, content) {
+    const row = document.createElement("div")
+    row.className = `chat-bubble is-${role}`
+    row.innerHTML = `<span class="chat-role">${role === "assistant" ? "Gemma" : "You"}</span><p>${escapeHtml(content)}</p>`
+    assistantChat.appendChild(row)
+    assistantChat.scrollTop = assistantChat.scrollHeight
+  }
+
+  function renderSuggestions(questions) {
+    assistantSuggestions.innerHTML = ""
+    if (!questions || !questions.length) {
+      assistantSuggestions.style.display = "none"
+      return
+    }
+    assistantSuggestions.style.display = "flex"
+    questions.forEach((question) => {
+      const btn = document.createElement("button")
+      btn.type = "button"
+      btn.className = "secondary"
+      btn.textContent = question
+      btn.addEventListener("click", () => sendMessage(question))
+      assistantSuggestions.appendChild(btn)
+    })
+  }
+
+  async function startAssistant() {
+    startAssistantBtn.disabled = true
+    assistantStatus.textContent = "Thinking mode"
+    assistantChat.innerHTML = ""
+    messages.length = 0
+    renderSuggestions([])
+
+    try {
+      const res = await fetch("/api/documents/{{ doc.id }}/assistant/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        assistantStatus.textContent = data.error || "Could not start assistant."
+        return
+      }
+
+      if (data.chunks_indexed != null) {
+        indexStatusEl.firstChild.textContent = `✅ Indexed ${data.chunks_indexed} chunks `
+      }
+
+      appendBubble("assistant", data.opening)
+      messages.push({ role: "assistant", content: data.opening })
+      renderSuggestions(data.questions || [])
+      assistantForm.hidden = false
+      assistantStatus.textContent = ""
+    } catch (err) {
+      assistantStatus.textContent = "Could not start assistant. Please try again."
+    } finally {
+      startAssistantBtn.disabled = false
+    }
+  }
+
+  async function sendMessage(text) {
+    const message = (text || "").trim()
+    if (!message) return
+
+    assistantSuggestions.style.display = "none"
+    appendBubble("user", message)
+    messages.push({ role: "user", content: message })
+    assistantInput.value = ""
+    assistantSendBtn.disabled = true
+    assistantStatus.textContent = "Thinking mode"
+
+    try {
+      const res = await fetch("/api/documents/{{ doc.id }}/assistant/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          messages: messages.slice(0, -1),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        assistantStatus.textContent = data.error || "Assistant failed."
+        return
+      }
+
+      const reply = data.follow_up
+        ? `${data.reply}\n\n${data.follow_up}`
+        : data.reply
+      appendBubble("assistant", reply)
+      messages.push({ role: "assistant", content: reply })
+      assistantStatus.textContent = ""
+    } catch (err) {
+      assistantStatus.textContent = "Something went wrong. Please try again."
+    } finally {
+      assistantSendBtn.disabled = false
+      assistantInput.focus()
+    }
+  }
+
+  startAssistantBtn.addEventListener("click", startAssistant)
+  assistantForm.addEventListener("submit", (event) => {
+    event.preventDefault()
+    sendMessage(assistantInput.value)
   })
 </script>
 {% endblock %}

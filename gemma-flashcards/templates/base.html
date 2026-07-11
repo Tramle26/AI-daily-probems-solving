@@ -136,7 +136,22 @@
     </aside>
 
     <script>
-      (function () {
+      ;(function () {
+        document.querySelectorAll(".password-toggle").forEach((button) => {
+          button.addEventListener("click", () => {
+            const input = button.parentElement?.querySelector("input")
+            if (!input) return
+
+            const showing = input.type === "text"
+            input.type = showing ? "password" : "text"
+            button.textContent = showing ? "Show" : "Hide"
+            button.setAttribute("aria-label", showing ? "Show password" : "Hide password")
+            button.setAttribute("aria-pressed", String(!showing))
+          })
+        })
+      })()
+
+      ;(function () {
         const menuBtn = document.querySelector(".nav-menu-btn")
         const menuDropdown = document.getElementById("navMenuDropdown")
         if (menuBtn && menuDropdown) {

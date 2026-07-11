@@ -368,11 +368,11 @@
     </label>
 
     <label>
-      Theme
+      Topics
       <input
-        id="theme"
-        name="theme"
-        value="{{ theme or 'World Cup soccer' }}"
+        id="topic"
+        name="topic"
+        value="{{ topic or 'World Cup soccer' }}"
         autocomplete="off"
       />
     </label>
@@ -402,16 +402,15 @@
     <button id="generate" class="primary" type="submit">
       Generate Cards
     </button>
-    <button type="button" id="saveDeck" class="secondary" hidden>Save Deck</button>
     <p id="message" class="message" role="status"></p>
   </form>
 
   <section class="deck">
     <div class="deck-header">
       <div>
-        <h1>Create Deck</h1>
+        <h1>Create Cards</h1>
         <p class="muted">
-          Generate a deck, then study one card at a time, like Quizlet.
+          Generate cards, then study one at a time, like Quizlet.
         </p>
       </div>
 
@@ -425,7 +424,7 @@
 
     <div id="viewToggle" class="view-toggle" hidden>
       <button type="button" id="studyViewBtn" class="active">Study</button>
-      <button type="button" id="browseViewBtn">Browse deck</button>
+      <button type="button" id="browseViewBtn">Browse cards</button>
     </div>
 
     <div id="studyArea" class="study-area" hidden>
@@ -449,7 +448,7 @@
     </div>
 
     <div id="cards" class="cards deck-view">
-      <div class="empty">Choose a language and theme to start a deck.</div>
+      <div class="empty">Choose a language and topics to start.</div>
     </div>
   </section>
 </main>
@@ -461,7 +460,6 @@
   const progressText = document.querySelector("#progressText")
   const progressFill = document.querySelector("#progressFill")
   const generateButton = document.querySelector("#generate")
-  const saveDeckButton = document.querySelector("#saveDeck")
   const viewToggle = document.querySelector("#viewToggle")
   const studyArea = document.querySelector("#studyArea")
   const studyProgress = document.querySelector("#studyProgress")
@@ -474,6 +472,9 @@
   const summaryText = document.querySelector("#summaryText")
   const studyViewBtn = document.querySelector("#studyViewBtn")
   const browseViewBtn = document.querySelector("#browseViewBtn")
+
+  // Warm embeddings in the background so later library features stay snappy.
+  fetch("/api/embeddings/warmup", { method: "POST" }).catch(() => {})
 
   let source = null
   let generatedCards = []
@@ -638,7 +639,6 @@
 
     cards.innerHTML = ""
     generatedCards = []
-    saveDeckButton.hidden = true
     viewToggle.hidden = true
     studyArea.hidden = true
     studySummary.hidden = true
@@ -664,9 +664,8 @@
     })
 
     source.addEventListener("done", () => {
-      showMessage("Deck ready. Tap the card to study. Words saved to library.")
+      showMessage("Cards ready. Tap a card to study. Words saved to library.")
       generateButton.disabled = false
-      saveDeckButton.hidden = false
       startStudyMode()
       source.close()
     })
@@ -682,24 +681,6 @@
       generateButton.disabled = false
       source.close()
     })
-  })
-
-  saveDeckButton.addEventListener("click", async () => {
-    const title = document.querySelector("#theme").value || "My Deck"
-    const language = document.querySelector("#language").value
-    saveDeckButton.disabled = true
-    const res = await fetch("/api/decks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title,
-        language,
-        source_type: "topic",
-        cards: generatedCards,
-      }),
-    })
-    showMessage(res.ok ? "Deck saved!" : "Failed to save deck.")
-    saveDeckButton.disabled = false
   })
 </script>
 {% endblock %}

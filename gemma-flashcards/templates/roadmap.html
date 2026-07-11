@@ -46,10 +46,10 @@
       <div class="roadmap-progress-bar" role="progressbar" aria-valuenow="{{ level.progress_pct }}" aria-valuemin="0" aria-valuemax="100">
         <span style="width: {{ level.progress_pct }}%"></span>
       </div>
-      {% set study_theme = (level.topics[0] if level.topics else None) %}
+      {% set study_topic = (level.topics[0] if level.topics else None) %}
       <p style="margin-top: 12px;">
-        {% if study_theme %}
-        <a class="primary" style="text-decoration:none;display:inline-block;" href="{{ url_for('flashcards.index', theme=study_theme) }}">Study now</a>
+        {% if study_topic %}
+        <a class="primary" style="text-decoration:none;display:inline-block;" href="{{ url_for('flashcards.index', topic=study_topic) }}">Study now</a>
         {% else %}
         <a class="primary" style="text-decoration:none;display:inline-block;" href="{{ url_for('flashcards.index') }}">Study now</a>
         {% endif %}
