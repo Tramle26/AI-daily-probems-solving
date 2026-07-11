@@ -6,6 +6,7 @@ from google import genai
 
 from extensions import db
 from models import (
+    AskChatSession,
     AskHistory,
     ConversationSession,
     DictionarySearch,
@@ -15,6 +16,7 @@ from models import (
 )
 from services.gemma import (
     ask_document_smart,
+    ask_language_question,
     build_conversation_system_prompt,
     conversation_reply,
     conversation_reply_stream,
@@ -23,6 +25,7 @@ from services.gemma import (
     extract_document_vocabulary,
     extract_vocab_from_answer,
     generate_document_followups,
+    generate_general_ask_suggestions,
     sse,
     summarize_conversation,
 )
@@ -301,21 +304,40 @@ def review_mini_quiz():
 @bp.post("/ask")
 @login_required
 def api_ask():
-    data = request.get_json()
-    doc = get_owned_or_404(UploadedDocument, data["document_id"])
-    profile = get_profile()
+    """Legacy single-turn ask; prefer /ask/chat for multi-turn history."""
+    data = request.get_json() or {}
+    mode = (data.get("mode") or "document").strip().lower()
+    question = (data.get("question") or data.get("message") or "").strip()
+    if not question:
+        return jsonify({"error": "Enter a question."}), 400
 
+    profile = get_profile()
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
 
     client = genai.Client(api_key=api_key)
-    answer, sources = ask_document_smart(client, doc, data["question"], profile.native_language)
+    doc = None
+    sources = []
+
+    if mode == "document":
+        doc = get_owned_or_404(UploadedDocument, data["document_id"])
+        answer, sources = ask_document_smart(client, doc, question, profile.native_language)
+    else:
+        answer = ask_language_question(
+            client,
+            question,
+            messages=[],
+            target_language=profile.target_language,
+            native_language=profile.native_language,
+            level=profile.level or "",
+            goal=profile.goal or "",
+        )
 
     entry = AskHistory(
         user_id=current_user_id(),
-        document_id=doc.id,
-        question=data["question"],
+        document_id=doc.id if doc else None,
+        question=question,
         answer=answer,
     )
     db.session.add(entry)
@@ -324,12 +346,265 @@ def api_ask():
     return jsonify({"answer": answer, "ask_id": entry.id, "sources": sources})
 
 
+def _ask_session_query(mode, document_id=None):
+    query = AskChatSession.query.filter_by(user_id=current_user_id(), mode=mode)
+    if mode == "document":
+        return query.filter_by(document_id=document_id)
+    return query.filter(AskChatSession.document_id.is_(None))
+
+
+def _get_or_create_ask_session(mode, document_id=None):
+    session_row = _ask_session_query(mode, document_id).first()
+    if session_row:
+        return session_row
+    session_row = AskChatSession(
+        user_id=current_user_id(),
+        mode=mode,
+        document_id=document_id if mode == "document" else None,
+        messages=[],
+        suggested_questions=[],
+    )
+    db.session.add(session_row)
+    db.session.commit()
+    return session_row
+
+
+@bp.get("/ask/session")
+@login_required
+def ask_session_get():
+    """Return saved Ask Gemma chat for the selected mode/document."""
+    mode = (request.args.get("mode") or "general").strip().lower()
+    if mode not in ("general", "document"):
+        return jsonify({"error": "Invalid mode."}), 400
+
+    document_id = request.args.get("document_id", type=int)
+    doc = None
+    if mode == "document":
+        if not document_id:
+            return jsonify({"error": "Choose a document."}), 400
+        doc = get_owned_or_404(UploadedDocument, document_id)
+
+    session_row = _ask_session_query(mode, document_id).first()
+    if not session_row:
+        return jsonify({
+            "session_id": None,
+            "mode": mode,
+            "document_id": document_id,
+            "messages": [],
+            "questions": [],
+        })
+
+    return jsonify({
+        "session_id": session_row.id,
+        "mode": mode,
+        "document_id": document_id,
+        "messages": session_row.messages or [],
+        "questions": session_row.suggested_questions or [],
+        "updated_at": session_row.updated_at.isoformat() if session_row.updated_at else None,
+        "filename": doc.filename if doc else None,
+    })
+
+
+@bp.delete("/ask/session")
+@login_required
+def ask_session_delete():
+    """Clear saved Ask Gemma chat history for the selected mode/document."""
+    mode = (request.args.get("mode") or "general").strip().lower()
+    document_id = request.args.get("document_id", type=int)
+    if mode not in ("general", "document"):
+        return jsonify({"error": "Invalid mode."}), 400
+    if mode == "document":
+        if not document_id:
+            return jsonify({"error": "Choose a document."}), 400
+        get_owned_or_404(UploadedDocument, document_id)
+
+    session_row = _ask_session_query(mode, document_id).first()
+    if session_row:
+        db.session.delete(session_row)
+        db.session.commit()
+    return jsonify({"ok": True})
+
+
+@bp.post("/ask/suggestions")
+@login_required
+def ask_suggestions():
+    """Generate suggested questions for the current Ask mode."""
+    from datetime import datetime
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    data = request.get_json(silent=True) or {}
+    mode = (data.get("mode") or "general").strip().lower()
+    if mode not in ("general", "document"):
+        return jsonify({"error": "Invalid mode."}), 400
+
+    profile = get_profile()
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    client = genai.Client(api_key=api_key)
+    document_id = data.get("document_id")
+    doc = None
+
+    try:
+        if mode == "document":
+            if not document_id:
+                return jsonify({"error": "Choose a document."}), 400
+            doc = get_owned_or_404(UploadedDocument, int(document_id))
+            try:
+                index_document(doc.id, doc.raw_text)
+            except Exception:
+                pass
+            excerpts = sample_document_chunks(doc.id, top_k=6) or [doc.raw_text[:4000]]
+            followups = generate_document_followups(
+                client,
+                excerpts,
+                language=doc.language or profile.target_language,
+                native_language=profile.native_language,
+                filename=doc.filename or "",
+            )
+            opening = followups.opening
+            questions = followups.questions
+        else:
+            document_id = None
+            followups = generate_general_ask_suggestions(
+                client,
+                target_language=profile.target_language,
+                native_language=profile.native_language,
+                level=profile.level or "",
+                goal=profile.goal or "",
+            )
+            opening = followups.opening
+            questions = followups.questions
+    except Exception as exc:
+        return jsonify({"error": f"Could not generate suggestions: {exc}"}), 500
+
+    session_row = _get_or_create_ask_session(mode, document_id)
+    messages = list(session_row.messages or [])
+    if not messages and opening:
+        messages = [{"role": "assistant", "content": opening}]
+
+    session_row.messages = messages
+    session_row.suggested_questions = questions
+    session_row.updated_at = datetime.utcnow()
+    flag_modified(session_row, "messages")
+    flag_modified(session_row, "suggested_questions")
+    db.session.commit()
+
+    return jsonify({
+        "session_id": session_row.id,
+        "opening": opening,
+        "questions": questions,
+        "messages": messages,
+    })
+
+
+@bp.post("/ask/chat")
+@login_required
+def ask_chat():
+    """Multi-turn Ask Gemma with saved chat history."""
+    from datetime import datetime
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    data = request.get_json() or {}
+    mode = (data.get("mode") or "general").strip().lower()
+    user_message = (data.get("message") or data.get("question") or "").strip()
+    if mode not in ("general", "document"):
+        return jsonify({"error": "Invalid mode."}), 400
+    if not user_message:
+        return jsonify({"error": "Enter a question."}), 400
+
+    profile = get_profile()
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
+
+    document_id = data.get("document_id")
+    doc = None
+    if mode == "document":
+        if not document_id:
+            return jsonify({"error": "Choose a document."}), 400
+        doc = get_owned_or_404(UploadedDocument, int(document_id))
+        document_id = doc.id
+    else:
+        document_id = None
+
+    session_row = _get_or_create_ask_session(mode, document_id)
+    prior_messages = list(session_row.messages or [])
+
+    client = genai.Client(api_key=api_key)
+    sources = []
+    try:
+        if mode == "document":
+            try:
+                index_document(doc.id, doc.raw_text)
+            except Exception:
+                pass
+            turn, sources = document_assistant_reply(
+                client,
+                doc,
+                user_message=user_message,
+                messages=prior_messages,
+                language=doc.language or profile.target_language,
+                native_language=profile.native_language,
+            )
+            reply = turn.reply
+            if turn.follow_up:
+                reply = f"{turn.reply}\n\n{turn.follow_up}"
+            answer_for_history = reply
+        else:
+            reply = ask_language_question(
+                client,
+                user_message,
+                messages=prior_messages,
+                target_language=profile.target_language,
+                native_language=profile.native_language,
+                level=profile.level or "",
+                goal=profile.goal or "",
+            )
+            answer_for_history = reply
+    except Exception as exc:
+        return jsonify({"error": f"Ask failed: {exc}"}), 500
+
+    full_messages = prior_messages + [
+        {"role": "user", "content": user_message},
+        {"role": "assistant", "content": reply},
+    ]
+    session_row.messages = full_messages
+    session_row.suggested_questions = []
+    session_row.updated_at = datetime.utcnow()
+    flag_modified(session_row, "messages")
+    flag_modified(session_row, "suggested_questions")
+
+    entry = AskHistory(
+        user_id=current_user_id(),
+        document_id=document_id,
+        question=user_message,
+        answer=answer_for_history,
+    )
+    db.session.add(entry)
+    db.session.commit()
+
+    return jsonify({
+        "reply": reply,
+        "sources": sources,
+        "ask_id": entry.id,
+        "session_id": session_row.id,
+        "messages": full_messages,
+    })
+
+
 @bp.post("/ask/<int:ask_id>/make-cards")
 @login_required
 def ask_make_cards(ask_id):
     entry = get_owned_or_404(AskHistory, ask_id)
-    doc = entry.document
     profile = get_profile()
+    language = profile.target_language
+    document_id = entry.document_id
+    if entry.document:
+        language = entry.document.language or language
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -337,7 +612,7 @@ def ask_make_cards(ask_id):
 
     client = genai.Client(api_key=api_key)
     suggestions = extract_vocab_from_answer(
-        client, entry.answer, doc.language, profile.native_language
+        client, entry.answer, language, profile.native_language
     )
     cards = [
         {"front": w.word, "back": w.meaning, "example": w.example, "topic": w.topic}
@@ -345,10 +620,10 @@ def ask_make_cards(ask_id):
     ]
     deck = save_deck(
         f"From: {entry.question[:40]}",
-        doc.language,
+        language,
         "ask",
         cards,
-        document_id=doc.id,
+        document_id=document_id,
     )
     return jsonify({"deck_id": deck.id, "cards": cards})
 
@@ -360,98 +635,6 @@ def document_index(doc_id):
     reindex = request.json.get("reindex", False) if request.is_json else False
     count = index_document(doc.id, doc.raw_text, reindex=reindex)
     return jsonify({"chunks_indexed": count})
-
-
-@bp.post("/documents/<int:doc_id>/assistant/start")
-@login_required
-def document_assistant_start(doc_id):
-    """Index with PyTorch embeddings if needed, then propose follow-up questions."""
-    doc = get_owned_or_404(UploadedDocument, doc_id)
-    profile = get_profile()
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
-
-    try:
-        chunks_indexed = index_document(doc.id, doc.raw_text)
-    except Exception as exc:
-        return jsonify({"error": f"Could not index document with embeddings: {exc}"}), 500
-
-    excerpts = sample_document_chunks(doc.id, top_k=6)
-    if not excerpts:
-        excerpts = [doc.raw_text[:4000]]
-
-    client = genai.Client(api_key=api_key)
-    try:
-        followups = generate_document_followups(
-            client,
-            excerpts,
-            language=doc.language or profile.target_language,
-            native_language=profile.native_language,
-            filename=doc.filename or "",
-        )
-    except Exception as exc:
-        return jsonify({"error": f"Assistant failed: {exc}"}), 500
-
-    return jsonify({
-        "opening": followups.opening,
-        "questions": followups.questions,
-        "chunks_indexed": chunks_indexed,
-    })
-
-
-@bp.post("/documents/<int:doc_id>/assistant/chat")
-@login_required
-def document_assistant_chat(doc_id):
-    """Answer a learner message with PyTorch RAG and ask a follow-up question."""
-    doc = get_owned_or_404(UploadedDocument, doc_id)
-    profile = get_profile()
-    data = request.get_json() or {}
-    user_message = (data.get("message") or "").strip()
-    messages = data.get("messages") or []
-
-    if not user_message:
-        return jsonify({"error": "Enter a message."}), 400
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
-
-    # Ensure embeddings exist so retrieval can use PyTorch vectors.
-    try:
-        index_document(doc.id, doc.raw_text)
-    except Exception:
-        pass
-
-    client = genai.Client(api_key=api_key)
-    try:
-        turn, sources = document_assistant_reply(
-            client,
-            doc,
-            user_message=user_message,
-            messages=messages,
-            language=doc.language or profile.target_language,
-            native_language=profile.native_language,
-        )
-    except Exception as exc:
-        return jsonify({"error": f"Assistant failed: {exc}"}), 500
-
-    entry = AskHistory(
-        user_id=current_user_id(),
-        document_id=doc.id,
-        question=user_message,
-        answer=f"{turn.reply}\n\nFollow-up: {turn.follow_up}",
-    )
-    db.session.add(entry)
-    db.session.commit()
-
-    return jsonify({
-        "reply": turn.reply,
-        "follow_up": turn.follow_up,
-        "sources": sources,
-        "ask_id": entry.id,
-    })
 
 
 @bp.post("/semantic-search")
@@ -470,6 +653,9 @@ def vocabulary_similar(vocab_id):
         "similar": [{"word": v.word, "meaning": v.meaning, "topic": v.topic} for v in similar],
     })
 
+CONVERSATION_LANGUAGES = {"English", "Spanish", "Vietnamese", "French", "Chinese"}
+
+
 @bp.post("/conversation/start")
 @login_required
 def conversation_start():
@@ -477,12 +663,15 @@ def conversation_start():
     profile = get_profile()
     topic = (data.get("topic") or "daily life").strip()
     difficulty = data.get("difficulty") or profile.level or "beginner"
+    language = (data.get("language") or "").strip()
+    if language not in CONVERSATION_LANGUAGES:
+        language = profile.target_language or "French"
     target_words = [w.strip() for w in (data.get("target_words") or []) if w and str(w).strip()]
     target_words = target_words[:8]
 
     # Avoid cold-loading the embedding model here — that can take 10–30s.
     related_words = related_words_for_conversation(
-        topic, profile.target_language, target_words, limit=8
+        topic, language, target_words, limit=8
     )
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -490,7 +679,7 @@ def conversation_start():
         return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
 
     system_prompt = build_conversation_system_prompt(
-        profile.target_language,
+        language,
         topic,
         difficulty,
         target_words,
@@ -500,6 +689,7 @@ def conversation_start():
 
     conv = ConversationSession(
         user_id=current_user_id(),
+        language=language,
         topic=topic,
         difficulty=difficulty,
         target_words=target_words,
@@ -510,6 +700,7 @@ def conversation_start():
 
     meta = {
         "session_id": conv.id,
+        "language": language,
         "topic": topic,
         "difficulty": difficulty,
         "target_words": target_words,
@@ -581,6 +772,7 @@ def conversation_message(session_id):
         return jsonify({"error": "Conversation already finished"}), 400
 
     profile = get_profile()
+    language = conv.language or profile.target_language or "French"
     messages = list(conv.messages or [])
     messages.append({"role": "user", "content": user_text})
 
@@ -589,7 +781,7 @@ def conversation_message(session_id):
         return jsonify({"error": "Missing GEMINI_API_KEY"}), 500
 
     system_prompt = build_conversation_system_prompt(
-        profile.target_language,
+        language,
         conv.topic or "daily life",
         conv.difficulty or profile.level or "beginner",
         conv.target_words or [],

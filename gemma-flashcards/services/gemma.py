@@ -377,6 +377,11 @@ class DocumentFollowUps(BaseModel):
     questions: list[str] = Field(description="3–5 follow-up study questions about the document.")
 
 
+class GeneralAskSuggestions(BaseModel):
+    opening: str = Field(description="Short friendly greeting for language learning help.")
+    questions: list[str] = Field(description="3–5 suggested language-learning questions.")
+
+
 class DocumentAssistantTurn(BaseModel):
     reply: str = Field(description="Answer grounded in the document excerpts.")
     follow_up: str = Field(description="One short follow-up question to keep studying.")
@@ -406,6 +411,53 @@ Excerpts:
         ),
     )
     return parse_model_json(response.text, DocumentFollowUps)
+
+
+def generate_general_ask_suggestions(client, target_language, native_language, level="", goal=""):
+    """Suggest language-learning questions unrelated to a specific document."""
+    prompt = f"""
+You are a friendly language tutor helping someone learn {target_language}.
+Explain and write suggestions in {native_language}.
+Learner level: {level or "unspecified"}. Goal: {goal or "general improvement"}.
+
+Greet them briefly and propose 3–5 concrete questions they could ask you about
+grammar, vocabulary, study habits, pronunciation tips, or common mistakes in {target_language}.
+"""
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.5,
+            response_mime_type="application/json",
+            response_schema=GeneralAskSuggestions,
+        ),
+    )
+    return parse_model_json(response.text, GeneralAskSuggestions)
+
+
+def ask_language_question(client, question, messages, target_language, native_language, level="", goal=""):
+    """Answer a general language-learning question (not tied to an uploaded document)."""
+    history = "\n".join(
+        f"{m.get('role', 'user').upper()}: {m.get('content', '')}"
+        for m in (messages or [])[-8:]
+    )
+    prompt = f"""
+You are Gemma, a helpful language tutor for someone learning {target_language}.
+Answer in {native_language} when explaining; include short {target_language} examples when useful.
+Learner level: {level or "unspecified"}. Goal: {goal or "general improvement"}.
+Be clear, practical, and encouraging. Keep answers focused.
+
+Recent chat:
+{history or "(none)"}
+
+Learner question: {question}
+"""
+    response = client.models.generate_content(
+        model=GOOGLE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(temperature=0.4),
+    )
+    return response.text
 
 
 def document_assistant_reply(
@@ -782,10 +834,13 @@ def _conversation_contents(messages):
 
 
 def _conversation_generate_config(system_prompt):
+    # Gemma 4 can spend the whole output budget on hidden "thought" tokens.
+    # Keep thinking minimal so short dialogue replies actually reach the user.
     return types.GenerateContentConfig(
         temperature=0.7,
-        max_output_tokens=180,
+        max_output_tokens=512,
         system_instruction=system_prompt,
+        thinking_config=types.ThinkingConfig(thinking_level="minimal"),
     )
 
 

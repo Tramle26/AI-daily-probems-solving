@@ -6,6 +6,13 @@
   <p class="muted">Chat with Gemma using words from your library. Stay on topic and try to use your target vocabulary.</p>
 
   <div id="setup" class="form-grid">
+    <label>Language
+      <select id="language">
+        {% for lang in languages %}
+        <option value="{{ lang }}" {% if profile.target_language == lang %}selected{% endif %}>{{ lang }}</option>
+        {% endfor %}
+      </select>
+    </label>
     <label>Topic
       <input type="text" id="topicInput" value="{{ default_topic }}" />
     </label>
@@ -21,7 +28,7 @@
       {% if recent_words %}
       <div class="word-picker" id="wordPicker">
         {% for item in recent_words %}
-        <label class="word-chip">
+        <label class="word-chip" data-language="{{ item.language }}">
           <input type="checkbox" value="{{ item.word }}" />
           <span>{{ item.word }}</span>
         </label>
@@ -79,9 +86,25 @@
 
   function selectedWords() {
     return Array.from(document.querySelectorAll("#wordPicker input:checked"))
+      .filter((el) => el.closest(".word-chip")?.style.display !== "none")
       .map((el) => el.value)
       .slice(0, 8)
   }
+
+  function filterWordsByLanguage() {
+    const language = document.getElementById("language").value
+    document.querySelectorAll("#wordPicker .word-chip").forEach((chip) => {
+      const match = !chip.dataset.language || chip.dataset.language === language
+      chip.style.display = match ? "" : "none"
+      if (!match) {
+        const input = chip.querySelector("input")
+        if (input) input.checked = false
+      }
+    })
+  }
+
+  document.getElementById("language").addEventListener("change", filterWordsByLanguage)
+  filterWordsByLanguage()
 
   function setBusy(next) {
     busy = next
@@ -164,6 +187,7 @@
     statusEl.textContent = "Starting…"
     summaryModal.hidden = true
     const payload = {
+      language: document.getElementById("language").value,
       topic: document.getElementById("topicInput").value.trim() || "daily life",
       difficulty: document.getElementById("difficulty").value,
       target_words: selectedWords(),
@@ -173,7 +197,7 @@
       setup.hidden = true
       chatPanel.hidden = false
       chatLog.innerHTML = ""
-      chatMeta.textContent = `Topic: ${payload.topic}`
+      chatMeta.textContent = `${payload.language} · Topic: ${payload.topic}`
 
       const res = await fetch("/api/conversation/start?stream=1", {
         method: "POST",
@@ -187,10 +211,12 @@
       let targetEl = null
       let failed = false
 
+      let gotDone = false
+
       await readSse(res, {
         meta: (data) => {
           sessionId = data.session_id
-          chatMeta.textContent = `Topic: ${data.topic} · Targets: ${(data.target_words || []).join(", ") || "free practice"}`
+          chatMeta.textContent = `${data.language || payload.language} · Topic: ${data.topic} · Targets: ${(data.target_words || []).join(", ") || "free practice"}`
           statusEl.textContent = "Gemma is writing…"
           targetEl = beginAssistantBubble()
         },
@@ -200,6 +226,7 @@
           chatLog.scrollTop = chatLog.scrollHeight
         },
         done: (data) => {
+          gotDone = true
           sessionId = data.session_id || sessionId
           if (targetEl) {
             targetEl.textContent = data.reply || targetEl.textContent
@@ -217,8 +244,8 @@
         },
       })
 
-      if (!sessionId && !failed) {
-        statusEl.textContent = "Could not start."
+      if ((!sessionId || !gotDone) && !failed) {
+        statusEl.textContent = "Could not start — empty reply from Gemma. Try again."
         setup.hidden = false
         chatPanel.hidden = true
       }
@@ -253,23 +280,33 @@
         body: JSON.stringify({ message: text }),
       })
 
+      let gotDone = false
       await readSse(res, {
         token: (data) => {
           targetEl.textContent += data.text || ""
           chatLog.scrollTop = chatLog.scrollHeight
         },
         done: (data) => {
+          gotDone = true
           targetEl.textContent = data.reply || targetEl.textContent
           targetEl.closest(".chat-bubble")?.classList.remove("is-streaming")
           statusEl.textContent = ""
         },
         error: (data) => {
+          gotDone = true
           targetEl.textContent = data.error || "Reply failed."
+          targetEl.closest(".chat-bubble")?.classList.remove("is-streaming")
           statusEl.textContent = data.error || "Reply failed."
         },
       })
+      if (!gotDone) {
+        targetEl.textContent = targetEl.textContent || "Reply failed — empty response."
+        targetEl.closest(".chat-bubble")?.classList.remove("is-streaming")
+        statusEl.textContent = "Reply failed — empty response."
+      }
     } catch (err) {
       targetEl.textContent = err.message || "Network error."
+      targetEl.closest(".chat-bubble")?.classList.remove("is-streaming")
       statusEl.textContent = err.message || "Network error."
     } finally {
       setBusy(false)

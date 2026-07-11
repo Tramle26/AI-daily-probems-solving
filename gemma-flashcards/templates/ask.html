@@ -3,120 +3,406 @@
 {% block content %}
 <section class="panel">
   <h1>Ask Gemma</h1>
-  <p class="muted">Ask questions about your uploaded documents.</p>
+  <p class="muted">Ask about an uploaded document, or get help with language learning in general.</p>
 
-  <div class="section-grid">
-    <div>
-      <div class="form-grid">
-        <label>Document
-          <select id="documentId">
-            {% for doc in documents %}
-            <option value="{{ doc.id }}">{{ doc.filename }} ({{ doc.language or "unknown" }})</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>Your question
-          <textarea id="question" placeholder="What vocabulary appears in chapter 2?"></textarea>
-        </label>
-        <button type="button" id="askBtn" class="primary" {% if not documents %}disabled{% endif %}>Ask</button>
-      </div>
-
-      <div id="answerPanel" class="list-card" hidden style="margin-top: 16px;">
-        <h2>Answer</h2>
-        <p id="answerText"></p>
-        <details id="sourcesPanel" hidden style="margin-top: 8px;">
-          <summary class="muted">Sources used</summary>
-          <div id="sourcesList" class="section-grid" style="margin-top: 8px;"></div>
-        </details>
-        <button type="button" id="makeCardsBtn" class="secondary" style="margin-top: 12px;">Make flashcards from this answer</button>
-      </div>
-
-      <p id="status" class="muted" style="margin-top: 12px;"></p>
-      {% if not documents %}
-      <p class="muted">Upload a document first to use Ask Gemma.</p>
-      {% endif %}
-    </div>
-
-    <div class="list-card">
-      <h2>Recent questions</h2>
-      {% if history %}
-      <ul>
-        {% for entry in history %}
-        <li>
-          <strong>{{ entry.question[:60] }}{% if entry.question|length > 60 %}...{% endif %}</strong>
-          <p class="muted">{{ entry.created_at.strftime("%Y-%m-%d %H:%M") if entry.created_at else "" }}</p>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="muted">No questions yet.</p>
-      {% endif %}
-    </div>
+  <div class="ask-mode-toggle" role="group" aria-label="Question type">
+    <button type="button" class="ask-mode-btn {% if initial_mode == 'general' %}is-active{% endif %}" data-mode="general">
+      Language learning
+    </button>
+    <button
+      type="button"
+      class="ask-mode-btn {% if initial_mode == 'document' %}is-active{% endif %}"
+      data-mode="document"
+      {% if not documents %}disabled{% endif %}
+    >
+      Uploaded document
+    </button>
   </div>
+
+  <div id="documentPicker" class="form-grid" {% if initial_mode != 'document' %}hidden{% endif %} style="margin-top: 12px;">
+    <label>Document
+      <select id="documentId" {% if not documents %}disabled{% endif %}>
+        {% for doc in documents %}
+        <option value="{{ doc.id }}" {% if initial_document_id == doc.id %}selected{% endif %}>
+          {{ doc.filename }} ({{ doc.language or "unknown" }})
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  {% if not documents %}
+  <p class="muted" style="margin-top: 8px;">
+    No uploads yet. You can still ask general language questions, or
+    <a href="{{ url_for('main.upload') }}">upload a document</a> first.
+  </p>
+  {% endif %}
+
+  <div id="askSuggestions" class="filters" style="display:none; margin: 16px 0;"></div>
+  <div id="askChat" class="chat-log" aria-live="polite"></div>
+
+  <form id="askForm" class="chat-compose">
+    <div class="chat-compose-menu" id="chatComposeMenu" hidden>
+      <button
+        type="button"
+        class="chat-compose-menu-btn"
+        id="chatComposeMenuBtn"
+        aria-expanded="false"
+        aria-controls="chatComposeDropdown"
+        aria-label="Chat options"
+      >
+        ⋯
+      </button>
+      <div id="chatComposeDropdown" class="chat-compose-dropdown" hidden>
+        <button type="button" id="clearHistoryBtn">Clear history</button>
+      </div>
+    </div>
+    <input
+      type="text"
+      id="askInput"
+      placeholder="Ask Gemma anything…"
+      autocomplete="off"
+      required
+    />
+    <button type="submit" class="primary" id="askSendBtn">Send</button>
+  </form>
+
+  <p id="askStatus" class="muted chat-meta"></p>
+  <button type="button" id="makeCardsBtn" class="secondary" hidden style="margin-top: 8px;">
+    Make flashcards from last answer
+  </button>
 </section>
 
 <script>
+  const targetLanguage = {{ (profile.target_language if profile else "your language") | tojson }}
+  const hasDocuments = {{ (documents|length > 0) | tojson }}
+  const initialMode = {{ initial_mode | tojson }}
+  const initialDocumentId = {{ initial_document_id | tojson }}
+  const initialMessages = {{ (chat_session.messages if chat_session else []) | tojson }}
+  const initialQuestions = {{ (chat_session.suggested_questions if chat_session else []) | tojson }}
+
+  let mode = initialMode === "document" && hasDocuments ? "document" : "general"
   let lastAskId = null
+  let busy = false
+  const messages = []
 
-  document.querySelector("#askBtn")?.addEventListener("click", async () => {
-    const statusEl = document.querySelector("#status")
-    const answerPanel = document.querySelector("#answerPanel")
-    const question = document.querySelector("#question").value.trim()
+  const modeButtons = document.querySelectorAll(".ask-mode-btn")
+  const documentPicker = document.getElementById("documentPicker")
+  const documentIdEl = document.getElementById("documentId")
+  const askSuggestions = document.getElementById("askSuggestions")
+  const askChat = document.getElementById("askChat")
+  const askForm = document.getElementById("askForm")
+  const askInput = document.getElementById("askInput")
+  const askSendBtn = document.getElementById("askSendBtn")
+  const askStatus = document.getElementById("askStatus")
+  const makeCardsBtn = document.getElementById("makeCardsBtn")
+  const chatComposeMenu = document.getElementById("chatComposeMenu")
+  const chatComposeMenuBtn = document.getElementById("chatComposeMenuBtn")
+  const chatComposeDropdown = document.getElementById("chatComposeDropdown")
+  const clearHistoryBtn = document.getElementById("clearHistoryBtn")
 
-    if (!question) {
-      statusEl.textContent = "Enter a question."
-      return
-    }
+  const fallbackGeneralQuestions = [
+    `How can I practice ${targetLanguage} every day?`,
+    `What are common beginner mistakes in ${targetLanguage}?`,
+    `Help me learn useful everyday phrases in ${targetLanguage}.`,
+    `How should I review vocabulary I keep forgetting?`,
+  ]
 
-    statusEl.textContent = "Thinking..."
-    answerPanel.hidden = true
+  function currentDocumentId() {
+    if (mode !== "document" || !documentIdEl || !documentIdEl.value) return null
+    return Number(documentIdEl.value)
+  }
 
-    const res = await fetch("/api/ask", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        document_id: Number(document.querySelector("#documentId").value),
-        question,
-      }),
+  function closeComposeMenu() {
+    chatComposeMenuBtn.setAttribute("aria-expanded", "false")
+    chatComposeDropdown.hidden = true
+  }
+
+  function setBusy(next) {
+    busy = next
+    askSendBtn.disabled = next
+    askInput.disabled = next
+    modeButtons.forEach((btn) => {
+      if (btn.dataset.mode === "document" && !hasDocuments) {
+        btn.disabled = true
+      } else {
+        btn.disabled = next
+      }
     })
+    if (documentIdEl) documentIdEl.disabled = next || !hasDocuments
+  }
 
-    const data = await res.json()
-    if (!res.ok) {
-      statusEl.textContent = data.error || "Ask failed."
+  function escapeHtml(text) {
+    return String(text)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+  }
+
+  function appendBubble(role, content) {
+    const row = document.createElement("div")
+    row.className = `chat-bubble is-${role}`
+    row.innerHTML = `<span class="chat-role">${role === "assistant" ? "Gemma" : "You"}</span><p>${escapeHtml(content)}</p>`
+    askChat.appendChild(row)
+    askChat.scrollTop = askChat.scrollHeight
+  }
+
+  function renderSuggestions(questions) {
+    askSuggestions.innerHTML = ""
+    if (!questions || !questions.length) {
+      askSuggestions.style.display = "none"
+      return
+    }
+    askSuggestions.style.display = "flex"
+    questions.forEach((question) => {
+      const btn = document.createElement("button")
+      btn.type = "button"
+      btn.className = "secondary"
+      btn.textContent = question
+      btn.addEventListener("click", () => sendMessage(question))
+      askSuggestions.appendChild(btn)
+    })
+  }
+
+  function setHistoryUi(hasHistory) {
+    chatComposeMenu.hidden = !hasHistory
+    if (!hasHistory) closeComposeMenu()
+    makeCardsBtn.hidden = !lastAskId
+  }
+
+  function restoreSession(savedMessages, questions) {
+    askChat.innerHTML = ""
+    messages.length = 0
+    ;(savedMessages || []).forEach((msg) => {
+      if (!msg || !msg.content) return
+      appendBubble(msg.role === "user" ? "user" : "assistant", msg.content)
+      messages.push({
+        role: msg.role === "user" ? "user" : "assistant",
+        content: msg.content,
+      })
+    })
+    const hasHistory = messages.length > 0
+    setHistoryUi(hasHistory)
+    const onlyOpening = messages.length === 1 && messages[0].role === "assistant"
+    const hasUserTurns = messages.some((m) => m.role === "user")
+    renderSuggestions(hasUserTurns ? [] : (questions || []))
+    if (!hasHistory) {
+      // Keep empty chat ready; suggestions may still load.
+    }
+  }
+
+  async function loadSession() {
+    askStatus.textContent = ""
+    lastAskId = null
+    makeCardsBtn.hidden = true
+
+    const params = new URLSearchParams({ mode })
+    const docId = currentDocumentId()
+    if (mode === "document" && docId) params.set("document_id", String(docId))
+
+    try {
+      const res = await fetch(`/api/ask/session?${params}`)
+      const data = await res.json()
+      if (!res.ok) {
+        askStatus.textContent = data.error || "Could not load chat."
+        restoreSession([], [])
+        return
+      }
+
+      const saved = data.messages || []
+      const questions = data.questions || []
+      restoreSession(saved, questions)
+
+      if (!saved.length) {
+        await loadSuggestions()
+      } else if (!questions.length && !saved.some((m) => m.role === "user")) {
+        await loadSuggestions({ keepMessages: true })
+      }
+    } catch (_) {
+      askStatus.textContent = "Could not load chat."
+      restoreSession([], mode === "general" ? fallbackGeneralQuestions : [])
+    }
+  }
+
+  async function loadSuggestions({ keepMessages = false } = {}) {
+    askStatus.textContent = "Thinking mode"
+    setBusy(true)
+    try {
+      const body = { mode }
+      const docId = currentDocumentId()
+      if (mode === "document" && docId) body.document_id = docId
+
+      const res = await fetch("/api/ask/suggestions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        askStatus.textContent = data.error || "Could not load suggestions."
+        if (mode === "general") renderSuggestions(fallbackGeneralQuestions)
+        return
+      }
+
+      if (keepMessages) {
+        renderSuggestions(data.questions || [])
+      } else {
+        restoreSession(data.messages || [], data.questions || [])
+      }
+      askStatus.textContent = ""
+    } catch (_) {
+      askStatus.textContent = "Could not load suggestions."
+      if (mode === "general") renderSuggestions(fallbackGeneralQuestions)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function clearHistory() {
+    const ok = window.confirm("Clear this Ask Gemma chat history?")
+    if (!ok) return
+
+    clearHistoryBtn.disabled = true
+    askStatus.textContent = "Clearing history…"
+    const params = new URLSearchParams({ mode })
+    const docId = currentDocumentId()
+    if (mode === "document" && docId) params.set("document_id", String(docId))
+
+    try {
+      const res = await fetch(`/api/ask/session?${params}`, { method: "DELETE" })
+      const data = await res.json()
+      if (!res.ok) {
+        askStatus.textContent = data.error || "Could not clear history."
+        return
+      }
+      lastAskId = null
+      restoreSession([], [])
+      askStatus.textContent = ""
+      await loadSuggestions()
+    } catch (_) {
+      askStatus.textContent = "Could not clear history."
+    } finally {
+      clearHistoryBtn.disabled = false
+    }
+  }
+
+  async function sendMessage(text) {
+    const message = (text || "").trim()
+    if (!message || busy) return
+    if (mode === "document" && !currentDocumentId()) {
+      askStatus.textContent = "Choose a document first."
       return
     }
 
-    lastAskId = data.ask_id
-    statusEl.textContent = ""
-    answerPanel.hidden = false
-    document.querySelector("#answerText").textContent = data.answer
+    renderSuggestions([])
+    appendBubble("user", message)
+    messages.push({ role: "user", content: message })
+    askInput.value = ""
+    setBusy(true)
+    askStatus.textContent = "Thinking mode"
+    setHistoryUi(true)
 
-    const sourcesPanel = document.querySelector("#sourcesPanel")
-    const sourcesList = document.querySelector("#sourcesList")
-    if (data.sources && data.sources.length) {
-      sourcesList.innerHTML = data.sources.map((text, i) => `
-        <div class="list-card">
-          <strong>Chunk ${i + 1}</strong>
-          <p class="muted">${text.slice(0, 300)}${text.length > 300 ? "..." : ""}</p>
-        </div>
-      `).join("")
-      sourcesPanel.hidden = false
-    } else {
-      sourcesPanel.hidden = true
-      sourcesList.innerHTML = ""
+    try {
+      const body = { mode, message }
+      const docId = currentDocumentId()
+      if (mode === "document" && docId) body.document_id = docId
+
+      const res = await fetch("/api/ask/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        askStatus.textContent = data.error || "Ask failed."
+        return
+      }
+
+      appendBubble("assistant", data.reply)
+      messages.length = 0
+      ;(data.messages || []).forEach((msg) => messages.push(msg))
+      lastAskId = data.ask_id || null
+      makeCardsBtn.hidden = !lastAskId
+      askStatus.textContent = ""
+    } catch (_) {
+      askStatus.textContent = "Something went wrong. Please try again."
+    } finally {
+      setBusy(false)
+      askInput.focus()
+    }
+  }
+
+  function setMode(nextMode) {
+    if (busy) return
+    if (nextMode === "document" && !hasDocuments) return
+    mode = nextMode
+    modeButtons.forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.mode === mode)
+    })
+    documentPicker.hidden = mode !== "document"
+    askInput.placeholder = mode === "document"
+      ? "Ask about this document…"
+      : "Ask about language learning…"
+    loadSession()
+  }
+
+  modeButtons.forEach((btn) => {
+    btn.addEventListener("click", () => setMode(btn.dataset.mode))
+  })
+
+  documentIdEl?.addEventListener("change", () => {
+    if (mode === "document") loadSession()
+  })
+
+  askForm.addEventListener("submit", (event) => {
+    event.preventDefault()
+    sendMessage(askInput.value)
+  })
+
+  clearHistoryBtn.addEventListener("click", () => {
+    closeComposeMenu()
+    clearHistory()
+  })
+
+  chatComposeMenuBtn.addEventListener("click", (event) => {
+    event.stopPropagation()
+    const open = chatComposeMenuBtn.getAttribute("aria-expanded") === "true"
+    chatComposeMenuBtn.setAttribute("aria-expanded", String(!open))
+    chatComposeDropdown.hidden = open
+  })
+
+  document.addEventListener("click", (event) => {
+    if (!chatComposeMenu.contains(event.target)) closeComposeMenu()
+  })
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeComposeMenu()
+  })
+
+  makeCardsBtn.addEventListener("click", async () => {
+    if (!lastAskId || busy) return
+    setBusy(true)
+    askStatus.textContent = "Thinking mode"
+    try {
+      const res = await fetch(`/api/ask/${lastAskId}/make-cards`, { method: "POST" })
+      const data = await res.json()
+      askStatus.textContent = res.ok
+        ? `Deck #${data.deck_id} created with ${data.cards.length} cards.`
+        : (data.error || "Failed to create deck.")
+    } catch (_) {
+      askStatus.textContent = "Failed to create deck."
+    } finally {
+      setBusy(false)
     }
   })
 
-  document.querySelector("#makeCardsBtn")?.addEventListener("click", async () => {
-    if (!lastAskId) return
-    const statusEl = document.querySelector("#status")
-    statusEl.textContent = "Creating flashcards..."
-
-    const res = await fetch(`/api/ask/${lastAskId}/make-cards`, { method: "POST" })
-    const data = await res.json()
-    statusEl.textContent = res.ok
-      ? `Deck #${data.deck_id} created with ${data.cards.length} cards.`
-      : (data.error || "Failed to create deck.")
-  })
+  // Initial restore from server-rendered session, then fill suggestions if needed.
+  restoreSession(initialMessages || [], initialQuestions || [])
+  if (!(initialMessages || []).length) {
+    loadSuggestions()
+  } else {
+    setHistoryUi(true)
+  }
 </script>
 {% endblock %}

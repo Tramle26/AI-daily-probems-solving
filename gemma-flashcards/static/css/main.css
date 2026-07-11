@@ -190,15 +190,37 @@ body {
   display: grid;
 }
 
-.nav-menu-dropdown a {
+.nav-menu-dropdown a,
+.nav-menu-logout button {
   padding: 10px 12px;
   border-bottom: none;
   border-radius: 6px;
 }
 
-.nav-menu-dropdown a:hover {
+.nav-menu-dropdown a:hover,
+.nav-menu-logout button:hover {
   background: var(--accent-soft);
   border-bottom-color: transparent;
+}
+
+.nav-menu-logout {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 4px;
+  margin-top: 4px;
+}
+
+.nav-menu-logout button {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
 }
 
 .muted {
@@ -1126,6 +1148,7 @@ h2 {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+  align-items: center;
 }
 
 .chat-compose input {
@@ -1137,8 +1160,130 @@ h2 {
   font: inherit;
 }
 
+.chat-compose-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chat-compose-menu-btn {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.chat-compose-menu-btn:hover,
+.chat-compose-menu-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.chat-compose-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 150px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--white);
+  box-shadow: 0 8px 24px rgba(92, 46, 46, 0.12);
+}
+
+.chat-compose-dropdown:not([hidden]) {
+  display: grid;
+}
+
+.chat-compose-dropdown button {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-compose-dropdown button:hover {
+  background: var(--accent-soft);
+}
+
 .chat-meta {
   margin-top: 8px;
+}
+
+.assistant-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.ask-mode-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--white) 88%, var(--accent-soft));
+}
+
+.ask-mode-btn {
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.ask-mode-btn:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.ask-mode-btn.is-active {
+  background: var(--white);
+  color: var(--ink);
+  box-shadow: 0 1px 4px rgba(92, 46, 46, 0.08);
+}
+
+.ask-mode-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.assistant-history-banner {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel, #fff) 88%, var(--accent, #3b6d11) 12%);
+}
+
+.assistant-history-banner p {
+  margin: 0;
 }
 
 @media (max-width: 720px) {

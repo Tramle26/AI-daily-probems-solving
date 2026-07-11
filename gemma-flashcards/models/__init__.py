@@ -258,6 +258,7 @@ class ConversationSession(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    language = db.Column(db.String(32))
     topic = db.Column(db.String(128))
     difficulty = db.Column(db.String(16))
     target_words = db.Column(db.JSON, default=list)
@@ -268,3 +269,22 @@ class ConversationSession(db.Model):
     summary = db.Column(db.Text)
     started_at = db.Column(db.DateTime, default=datetime.utcnow)
     finished_at = db.Column(db.DateTime)
+
+
+class AskChatSession(db.Model):
+    """Saved multi-turn Ask Gemma chat (document or general language help)."""
+
+    __tablename__ = "ask_chat_session"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    mode = db.Column(db.String(16), nullable=False, default="general")  # general | document
+    document_id = db.Column(
+        db.Integer, db.ForeignKey("uploaded_document.id"), nullable=True, index=True
+    )
+    messages = db.Column(db.JSON, default=list)
+    suggested_questions = db.Column(db.JSON, default=list)
+    started_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    document = db.relationship("UploadedDocument", backref="ask_sessions")

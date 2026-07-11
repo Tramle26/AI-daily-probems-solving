@@ -6,7 +6,6 @@ from google import genai
 
 from extensions import db
 from models import (
-    AskHistory,
     DocumentChunk,
     PlacementSession,
     UploadedDocument,
@@ -274,7 +273,11 @@ def upload_excel():
 def upload_preview(doc_id):
     doc = get_owned_or_404(UploadedDocument, doc_id)
     chunk_count = DocumentChunk.query.filter_by(document_id=doc.id).count()
-    return render_template("upload_preview.html", doc=doc, chunk_count=chunk_count)
+    return render_template(
+        "upload_preview.html",
+        doc=doc,
+        chunk_count=chunk_count,
+    )
 
 
 @bp.route("/upload/<int:doc_id>/remove", methods=["POST"])
@@ -335,9 +338,40 @@ def review():
 @bp.route("/ask", methods=["GET", "POST"])
 @login_required
 def ask():
+    from models import AskChatSession
+
     docs = owned_query(UploadedDocument).order_by(UploadedDocument.uploaded_at.desc()).all()
-    history = owned_query(AskHistory).order_by(AskHistory.created_at.desc()).limit(20).all()
-    return render_template("ask.html", documents=docs, history=history)
+    mode = (request.args.get("mode") or "general").strip().lower()
+    if mode not in ("general", "document"):
+        mode = "general"
+
+    document_id = request.args.get("document_id", type=int)
+    if mode == "document":
+        if document_id:
+            get_owned_or_404(UploadedDocument, document_id)
+        elif docs:
+            document_id = docs[0].id
+        else:
+            mode = "general"
+            document_id = None
+    else:
+        document_id = None
+
+    query = AskChatSession.query.filter_by(user_id=current_user.id, mode=mode)
+    if mode == "document":
+        query = query.filter_by(document_id=document_id)
+    else:
+        query = query.filter(AskChatSession.document_id.is_(None))
+    chat_session = query.first()
+
+    return render_template(
+        "ask.html",
+        documents=docs,
+        profile=g.profile,
+        initial_mode=mode,
+        initial_document_id=document_id,
+        chat_session=chat_session,
+    )
 
 
 @bp.route("/placement")
@@ -474,4 +508,5 @@ def conversation():
         default_topic=default_topic,
         profile=g.profile,
         difficulties=LEVELS,
+        languages=LANGUAGES,
     )

@@ -44,4 +44,12 @@
     · <a href="{{ url_for('main.roadmap_view') }}">View roadmap</a>
   </p>
 </section>
+
+<section class="panel" style="margin-top: 20px;">
+  <h2>Account</h2>
+  <p class="muted">Signed in as {{ current_user.display_name or current_user.email }}</p>
+  <form method="post" action="{{ url_for('auth.logout') }}">
+    <button type="submit" class="secondary">Log out</button>
+  </form>
+</section>
 {% endblock %}

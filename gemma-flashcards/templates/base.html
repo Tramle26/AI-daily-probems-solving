@@ -53,13 +53,13 @@
             <a href="{{ url_for('main.conversation') }}">Conversation</a>
             <a href="{{ url_for('main.ask') }}">Ask Gemma</a>
             <a href="{{ url_for('main.settings') }}">Settings</a>
+            <form method="post" action="{{ url_for('auth.logout') }}" class="nav-menu-logout">
+              <button type="submit">Log out</button>
+            </form>
           </div>
         </div>
         <div class="nav-auth">
           <span class="muted nav-user">{{ current_user.display_name or current_user.email }}</span>
-          <form method="post" action="{{ url_for('auth.logout') }}" class="inline-form">
-            <button type="submit" class="link-button">Log out</button>
-          </form>
         </div>
         {% else %}
         <div class="nav-auth">
@@ -168,7 +168,7 @@
           })
 
           menuDropdown.addEventListener("click", (event) => {
-            if (event.target.closest("a")) closeMenu()
+            if (event.target.closest("a, button")) closeMenu()
           })
 
           document.addEventListener("click", (event) => {

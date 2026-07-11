@@ -71,6 +71,14 @@ def create_app():
             if alters:
                 db.session.commit()
 
+        if "conversation_session" in inspector.get_table_names():
+            conv_cols = {col["name"] for col in inspector.get_columns("conversation_session")}
+            if "language" not in conv_cols:
+                db.session.execute(
+                    text("ALTER TABLE conversation_session ADD COLUMN language VARCHAR(32)")
+                )
+                db.session.commit()
+
         VocabularyItem.query.filter_by(mastery_status="weak").update(
             {"mastery_status": "practice"}
         )
