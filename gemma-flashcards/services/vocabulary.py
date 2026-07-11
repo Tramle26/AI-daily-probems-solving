@@ -1,22 +1,72 @@
 import re
+import unicodedata
 
 from extensions import db
 from models import Flashcard, FlashcardDeck, VocabularyItem
 from services.embeddings import cosine_similarity, embed_text, is_model_loaded
 from services.ownership import current_user_id, owned_query
 
-_HAS_LETTER_RE = re.compile(r"[A-Za-z\u00C0-\u024F]", re.UNICODE)
+# Script families we care about for vocab quality checks.
+_LATIN_RE = re.compile(r"[A-Za-z\u00C0-\u024F\u1E00-\u1EFF]")
+_ARABIC_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
+_CJK_RE = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]")
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
+_HANGUL_RE = re.compile(r"[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+$")
+
+_LATIN_LANGUAGES = {
+    "english",
+    "spanish",
+    "french",
+    "vietnamese",
+    "portuguese",
+    "italian",
+    "german",
+}
 
 
-def is_valid_vocab_word(word):
-    """Reject punctuation-only or symbol garbage from model/PDF extraction."""
-    text = (word or "").strip()
-    if len(text) < 2:
+def _script_flags(text):
+    return {
+        "latin": bool(_LATIN_RE.search(text)),
+        "arabic": bool(_ARABIC_RE.search(text)),
+        "cjk": bool(_CJK_RE.search(text)),
+        "cyrillic": bool(_CYRILLIC_RE.search(text)),
+        "hangul": bool(_HANGUL_RE.search(text)),
+    }
+
+
+def is_valid_vocab_word(word, language=None):
+    """Reject punctuation junk, snake_case IDs, and mixed-script mashups."""
+    text = unicodedata.normalize("NFKC", (word or "")).strip()
+    if len(text) < 2 or len(text) > 80:
         return False
-    if not _HAS_LETTER_RE.search(text):
+    if "_" in text or _IDENTIFIER_RE.match(text.replace("'", "").replace("-", "")):
         return False
-    letters = sum(1 for ch in text if ch.isalpha())
-    return letters >= max(1, len(text) * 0.4)
+    # Disallow code-like tokens and weird joins.
+    if re.search(r"[<>{}[\]\\|^=+#~`$]", text):
+        return False
+    if text.count("/") > 1 or "//" in text:
+        return False
+
+    letters = [ch for ch in text if ch.isalpha()]
+    if len(letters) < max(1, int(len(text) * 0.4)):
+        return False
+
+    flags = _script_flags(text)
+    active_scripts = sum(1 for present in flags.values() if present)
+    if active_scripts == 0:
+        return False
+    # Mixed scripts like Arabic+French "تطبيق_de_l'équipe" are never legit vocab.
+    if active_scripts > 1:
+        return False
+
+    lang = (language or "").strip().lower()
+    if lang in _LATIN_LANGUAGES and not flags["latin"]:
+        return False
+    if lang == "chinese" and not flags["cjk"]:
+        return False
+
+    return True
 
 
 def get_words_by_status(language, status):

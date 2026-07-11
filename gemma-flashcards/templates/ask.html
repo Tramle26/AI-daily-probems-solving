@@ -340,7 +340,7 @@
     modeButtons.forEach((btn) => {
       btn.classList.toggle("is-active", btn.dataset.mode === mode)
     })
-    documentPicker.hidden = mode !== "document"
+    if (documentPicker) documentPicker.hidden = mode !== "document"
     askInput.placeholder = mode === "document"
       ? "Ask about this document…"
       : "Ask about language learning…"
@@ -353,6 +353,15 @@
 
   documentIdEl?.addEventListener("change", () => {
     if (mode === "document") loadSession()
+  })
+
+  // Keep picker visibility in sync with the active mode on first paint.
+  if (documentPicker) documentPicker.hidden = mode !== "document"
+  askInput.placeholder = mode === "document"
+    ? "Ask about this document…"
+    : "Ask about language learning…"
+  modeButtons.forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.mode === mode)
   })
 
   askForm.addEventListener("submit", (event) => {

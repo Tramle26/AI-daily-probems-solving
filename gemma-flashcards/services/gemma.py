@@ -94,7 +94,10 @@ Keep every field SHORT so the deck streams quickly:
 - memory_tip: leave empty or one short phrase
 
 Rules:
-- front must be a real word or short phrase in {language}, never punctuation or symbols alone.
+- front must be a real, natural word or short phrase in {language} only.
+- Never invent mashups, snake_case, code-like tokens, or mix scripts/languages in front
+  (e.g. never "hello_world" or Arabic+French glued together).
+- Do not use underscores, slashes, or punctuation-only fronts.
 - Do not repeat cards.
 - Prefer common, useful words. Do not pad with long explanations.
 """

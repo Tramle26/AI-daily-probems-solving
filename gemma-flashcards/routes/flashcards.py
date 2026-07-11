@@ -72,10 +72,12 @@ def stream():
                 continuity = build_continuity_context(topic, language)
 
             emitted = 0
+            # Ask for a few extras so filtered junk doesn't shrink the deck.
+            request_count = min(count + 4, 20)
             for card_data in card_stream(
                 language,
                 topic,
-                count,
+                request_count,
                 provider,
                 exclude_words=exclude,
                 native_language=profile.native_language,
@@ -85,7 +87,7 @@ def stream():
                     card = FlashcardSchema.model_validate(card_data)
                 except ValidationError:
                     continue
-                if not is_valid_vocab_word(card.front):
+                if not is_valid_vocab_word(card.front, language):
                     continue
 
                 vocab = upsert_vocabulary(
@@ -113,7 +115,7 @@ def stream():
                     break
 
             if emitted == 0:
-                yield sse("error", {"message": "The model didn't return any cards. Try again."})
+                yield sse("error", {"message": "The model didn't return any valid cards. Try again."})
                 return
 
         except ResponseError as exc:

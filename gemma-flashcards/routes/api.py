@@ -131,7 +131,7 @@ def generate_from_document(doc_id):
             "difficulty": item.difficulty,
         }
         for item in result.items
-        if is_valid_vocab_word(item.word)
+        if is_valid_vocab_word(item.word, doc.language or data.get("language"))
     ]
 
     language = doc.language or data.get("language", "English")
