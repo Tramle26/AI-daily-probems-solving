@@ -1,5 +1,5 @@
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from google import genai
 from sqlalchemy import func
@@ -19,90 +19,101 @@ def _date_range(start: date, end: date):
         current += timedelta(days=1)
 
 
-def _normalize_day(value):
-    if value is None:
+def _local_tz():
+    return datetime.now().astimezone().tzinfo
+
+
+def _to_local_date(dt: datetime) -> date | None:
+    """Map stored UTC-naive timestamps onto the learner's local calendar day."""
+    if dt is None:
         return None
-    if isinstance(value, date):
-        return value.isoformat()
-    return str(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_local_tz()).date()
 
 
-def _words_by_day(start_dt: datetime, end_dt: datetime):
+def _local_day_bounds_utc(start: date, end: date):
+    """UTC-naive window covering local calendar days start..end inclusive."""
+    tz = _local_tz()
+    start_local = datetime.combine(start, datetime.min.time(), tzinfo=tz)
+    end_local = datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+    start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+    return start_utc, end_utc
+
+
+def _words_by_day(start: date, end: date):
+    start_utc, end_utc = _local_day_bounds_utc(start, end)
     rows = (
-        db.session.query(
-            func.date(VocabularyItem.first_seen_at).label("day"),
-            func.count(VocabularyItem.id).label("count"),
-        )
+        db.session.query(VocabularyItem.first_seen_at)
         .filter(
             VocabularyItem.user_id == current_user_id(),
-            VocabularyItem.first_seen_at >= start_dt,
-            VocabularyItem.first_seen_at < end_dt + timedelta(days=1),
+            VocabularyItem.first_seen_at.isnot(None),
+            VocabularyItem.first_seen_at >= start_utc,
+            VocabularyItem.first_seen_at < end_utc,
         )
-        .group_by("day")
         .all()
     )
-    return {_normalize_day(row.day): row.count for row in rows}
+    counts = {}
+    for (ts,) in rows:
+        day = _to_local_date(ts)
+        if day is None or day < start or day > end:
+            continue
+        key = day.isoformat()
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
-def _activity_by_day(start_dt: datetime, end_dt: datetime):
+def _activity_by_day(start: date, end: date):
     active = set()
     uid = current_user_id()
+    start_utc, end_utc = _local_day_bounds_utc(start, end)
 
-    for row in (
-        db.session.query(func.date(VocabularyItem.first_seen_at))
+    def add_local_days(query):
+        for (ts,) in query:
+            day = _to_local_date(ts)
+            if day is not None and start <= day <= end:
+                active.add(day.isoformat())
+
+    add_local_days(
+        db.session.query(VocabularyItem.first_seen_at)
         .filter(
             VocabularyItem.user_id == uid,
-            VocabularyItem.first_seen_at >= start_dt,
-            VocabularyItem.first_seen_at < end_dt + timedelta(days=1),
+            VocabularyItem.first_seen_at.isnot(None),
+            VocabularyItem.first_seen_at >= start_utc,
+            VocabularyItem.first_seen_at < end_utc,
         )
-        .distinct()
         .all()
-    ):
-        day = _normalize_day(row[0])
-        if day:
-            active.add(day)
-
-    for row in (
-        db.session.query(func.date(VocabularyItem.last_reviewed_at))
+    )
+    add_local_days(
+        db.session.query(VocabularyItem.last_reviewed_at)
         .filter(
             VocabularyItem.user_id == uid,
             VocabularyItem.last_reviewed_at.isnot(None),
-            VocabularyItem.last_reviewed_at >= start_dt,
-            VocabularyItem.last_reviewed_at < end_dt + timedelta(days=1),
+            VocabularyItem.last_reviewed_at >= start_utc,
+            VocabularyItem.last_reviewed_at < end_utc,
         )
-        .distinct()
         .all()
-    ):
-        day = _normalize_day(row[0])
-        if day:
-            active.add(day)
-
-    for row in (
-        db.session.query(func.date(QuizSession.finished_at))
+    )
+    add_local_days(
+        db.session.query(QuizSession.finished_at)
         .filter(
             QuizSession.user_id == uid,
             QuizSession.finished_at.isnot(None),
-            QuizSession.finished_at >= start_dt,
-            QuizSession.finished_at < end_dt + timedelta(days=1),
+            QuizSession.finished_at >= start_utc,
+            QuizSession.finished_at < end_utc,
         )
-        .distinct()
         .all()
-    ):
-        day = _normalize_day(row[0])
-        if day:
-            active.add(day)
-
+    )
     return active
 
 
 def get_words_learned_series(range_key: str = "week"):
     range_key = range_key if range_key in RANGE_DAYS else "week"
-    today = date.today()
+    today = datetime.now().astimezone().date()
     days = RANGE_DAYS[range_key]
     start = today - timedelta(days=days - 1)
-    start_dt = datetime.combine(start, datetime.min.time())
-    end_dt = datetime.combine(today, datetime.max.time())
-    counts = _words_by_day(start_dt, end_dt)
+    counts = _words_by_day(start, today)
 
     if range_key == "year":
         buckets = {}
@@ -132,13 +143,11 @@ def get_words_learned_series(range_key: str = "week"):
 
 def get_streak_roadmap(range_key: str = "week"):
     range_key = range_key if range_key in RANGE_DAYS else "week"
-    today = date.today()
+    today = datetime.now().astimezone().date()
     days = RANGE_DAYS[range_key]
     start = today - timedelta(days=days - 1)
-    start_dt = datetime.combine(start, datetime.min.time())
-    end_dt = datetime.combine(today, datetime.max.time())
-    active_days = _activity_by_day(start_dt, end_dt)
-    word_counts = _words_by_day(start_dt, end_dt)
+    active_days = _activity_by_day(start, today)
+    word_counts = _words_by_day(start, today)
 
     roadmap = []
     for day in _date_range(start, today):
@@ -181,7 +190,7 @@ def get_progress_charts(range_key: str = "week"):
 
 
 def upsert_daily_snapshot():
-    today = date.today()
+    today = datetime.now().astimezone().date()
     uid = current_user_id()
     snap = owned_query(ProgressSnapshot).filter_by(date=today).first()
     if not snap:
@@ -191,12 +200,11 @@ def upsert_daily_snapshot():
     snap.words_learned = owned_query(VocabularyItem).count()
     snap.words_mastered = owned_query(VocabularyItem).filter_by(mastery_status="mastered").count()
 
-    start = datetime.combine(today, datetime.min.time())
-    end = datetime.combine(today, datetime.max.time())
+    start_utc, end_utc = _local_day_bounds_utc(today, today)
     sessions = owned_query(QuizSession).filter(
         QuizSession.finished_at.isnot(None),
-        QuizSession.finished_at >= start,
-        QuizSession.finished_at <= end,
+        QuizSession.finished_at >= start_utc,
+        QuizSession.finished_at < end_utc,
     ).all()
     if sessions and sum(s.total for s in sessions):
         snap.quiz_accuracy = sum(s.score for s in sessions) / sum(s.total for s in sessions) * 100
@@ -212,7 +220,7 @@ def get_dashboard_summary(profile):
     mastered = owned_query(VocabularyItem).filter_by(mastery_status="mastered").count()
     practice = owned_query(VocabularyItem).filter_by(mastery_status="practice").count()
 
-    week_ago = datetime.utcnow() - timedelta(days=7)
+    week_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
     sessions = owned_query(QuizSession).filter(QuizSession.finished_at >= week_ago).all()
     if sessions and sum(s.total for s in sessions):
         accuracy = sum(s.score for s in sessions) / sum(s.total for s in sessions) * 100
